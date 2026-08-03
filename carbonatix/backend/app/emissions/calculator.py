@@ -218,9 +218,10 @@ def _validate(
         "ef_captive_pltu": ef_captive_pltu,
     }
     for name, value in non_negative.items():
-        # not (value < 0): NaN must fail, and it fails this. But NaN and
-        # +inf both pass a bare `value >= 0`, so finiteness is also required
-        # -- otherwise infinity propagates silently into total_emissions.
+        # not (value < 0): NaN must fail, and it fails this (nan >= 0 is
+        # False). But +inf also satisfies a bare `value >= 0`, so finiteness
+        # is checked too -- otherwise infinity propagates silently into
+        # total_emissions.
         if not (math.isfinite(value) and value >= 0):
             raise ValueError(f"{name} must be non-negative, got {value!r}")
 
