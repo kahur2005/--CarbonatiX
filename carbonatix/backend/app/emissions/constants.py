@@ -5,6 +5,7 @@ gate in PRD section 17.1. They are literature-plausible, not sourced. Do not
 present figures derived from them as findings.
 """
 
+import math
 from dataclasses import dataclass, fields
 
 __all__ = ["DEFAULT_CONSTANTS", "ProcessConstants"]
@@ -37,7 +38,8 @@ class ProcessConstants:
                 # Written so NaN fails: `not (0 < nan <= 1)` is True.
                 if not 0.0 < value <= 1.0:
                     raise ValueError(f"{f.name} must be a fraction in (0, 1], got {value!r}")
-            elif not value > 0:  # not `value <= 0`: NaN must fail this
+            # not `math.isfinite(value) and value <= 0`: NaN and +/-inf must fail this
+            elif not (math.isfinite(value) and value > 0):
                 raise ValueError(f"{f.name} must be positive and finite, got {value!r}")
 
 
