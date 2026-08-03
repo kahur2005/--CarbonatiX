@@ -116,3 +116,49 @@ def test_rejects_positive_infinity_on_non_negative_field(field_name):
 def test_rejects_negative_infinity_on_non_negative_field(field_name):
     with pytest.raises(ValueError, match=field_name):
         calculate_emissions(**{**NOMINAL, field_name: float("-inf")})
+
+
+def test_ef_captive_pltu_is_applied_independently_of_power_mix():
+    """power_mix_captive_coal is left at its NOMINAL value of 1.0 on purpose:
+    that isolates ef_captive_pltu so this test fails if the two factors were
+    ever conflated, or if ef_captive_pltu were dropped from the Scope 2
+    formula entirely -- a risk the existing suite cannot catch, since every
+    other test also leaves ef_captive_pltu at 1.0, where `1.0 * anything ==
+    anything` hides its absence."""
+    baseline = calculate_emissions(**NOMINAL)
+    r = calculate_emissions(**{**NOMINAL, "ef_captive_pltu": 0.5})
+
+    assert r.eaf_emissions == pytest.approx(baseline.eaf_emissions * 0.5, rel=1e-12)
+    assert r.scope_1 == pytest.approx(baseline.scope_1, rel=1e-12)
+
+
+def test_nominal_matches_independently_computed_values():
+    """Anchor test: these figures were computed by hand with exact rational
+    arithmetic, independently of app.emissions.calculator and without
+    consulting DEFAULT_CONSTANTS as a live object. The other golden tests in
+    this file recompute expectations from the same expression shapes and the
+    same DEFAULT_CONSTANTS the implementation uses, so they catch wrong
+    wiring but not a shared misunderstanding of the formula. This test does
+    not share that blind spot.
+
+    If DEFAULT_CONSTANTS changes under the PRD Sec 17.1 calibration gate,
+    these literals must be recomputed by hand, not derived from the new
+    constants.
+    """
+    r = calculate_emissions(**NOMINAL)
+
+    assert r.nickel_output_tons == pytest.approx(110.16, rel=1e-9)
+    assert r.alloy_output_tons == pytest.approx(1101.6, rel=1e-9)
+    assert r.dry_ore_tons == pytest.approx(6800.0, rel=1e-9)
+    assert r.dryer_emissions == pytest.approx(1664.0, rel=1e-9)
+    assert r.kiln_heat_emissions == pytest.approx(2448.0, rel=1e-9)
+    assert r.kiln_reductant_emissions == pytest.approx(705.024, rel=1e-9)
+    assert r.eaf_mwh == pytest.approx(2643.84, rel=1e-9)
+    assert r.eaf_emissions == pytest.approx(2643.84, rel=1e-9)
+    assert r.scope_1 == pytest.approx(4817.024, rel=1e-9)
+    assert r.total_emissions == pytest.approx(7460.864, rel=1e-9)
+    assert r.intensity_per_tonne_ni == pytest.approx(67.7275236020, rel=1e-9)
+
+    r_half_ef = calculate_emissions(**{**NOMINAL, "ef_captive_pltu": 0.5})
+    assert r_half_ef.eaf_emissions == pytest.approx(1321.92, rel=1e-9)
+    assert r_half_ef.total_emissions == pytest.approx(6138.944, rel=1e-9)
