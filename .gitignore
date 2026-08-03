@@ -1,0 +1,29 @@
+# SDD scratch workspace
+.superpowers/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+.env*.local
+
+# Playwright
+playwright-report/
+test-results/
+
+# OS
+Thumbs.db
+.DS_Store
