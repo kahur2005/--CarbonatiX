@@ -51,8 +51,21 @@ _DIGIT_WORDS = (
 _NUMBER_WORD_PARTS = (*_DIGIT_WORDS, "puluh", "ratus", "belas", *_MAGNITUDE_WORDS)
 _UNIT_WORDS = ("tco2e", "ton", "rupiah", "rp")
 
+# A short, bounded run of whitespace and/or dash-family characters -- the
+# punctuation Indonesian actually uses to join a digit to the word right
+# after it (hyphenated compounds like "50-ribu" are ordinary, not exotic).
+# `\s` already covers space/tab/newline/non-breaking space; the dash
+# characters are added explicitly since they are not whitespace. Bounded to
+# at most 3 characters and excluding sentence punctuation (period, comma
+# used as a separator is already consumed by the digit run itself, "!",
+# "?") so this can join a digit to an *immediately adjacent* word, never
+# leap across a clause or sentence boundary to a coincidental, unrelated
+# occurrence of a magnitude word.
+_DIGIT_MAGNITUDE_JOINER = r"[\s\-‐‑‒–—―]{0,3}"
+
 _DIGIT_THEN_MAGNITUDE = re.compile(
-    r"\d[\d.,]*\s*(?:" + "|".join(_MAGNITUDE_WORDS) + r")\b", re.IGNORECASE
+    r"\d[\d.,]*" + _DIGIT_MAGNITUDE_JOINER + r"(?:" + "|".join(_MAGNITUDE_WORDS) + r")\b",
+    re.IGNORECASE,
 )
 # A run of 1-8 number-word tokens immediately followed by a unit -- e.g.
 # "lima puluh ribu ton". Requiring unit-adjacency (rather than flagging any

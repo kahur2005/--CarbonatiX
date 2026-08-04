@@ -233,3 +233,57 @@ def test_ordinary_prose_without_any_quantity_is_not_flagged():
         "memerlukan tindakan strategis segera untuk menjaga kepatuhan."
     )
     assert unsupported_numerals(good, permitted) == set()
+
+
+# -- Digit-magnitude-word joiner must survive ordinary punctuation, not just
+# -- whitespace: a hyphen between a digit and "ribu"/"miliar" is an ordinary
+# -- Indonesian compound, not an exotic bypass attempt. -----------------------
+
+
+def test_hyphenated_digit_and_magnitude_word_is_caught_kredit_karbon():
+    """Re-reviewer repro #1: a hyphen (not whitespace) between the digit and
+    the magnitude word must not defeat the guard."""
+    r = calculate_emissions(**NOMINAL)
+    p = assess(r, cap_tco2e=r.total_emissions - 500, carbon_price_idr_per_ton=35200.0)
+    _, permitted = build_prompt(r, p, FORECAST, select_clauses(is_compliant=False))
+    bad = "Kami merekomendasikan pembelian 50-ribu kredit karbon tambahan."
+    assert unsupported_numerals(bad, permitted) != set()
+
+
+def test_hyphenated_digit_and_magnitude_word_is_caught_rp_miliar():
+    """Re-reviewer repro #2."""
+    r = calculate_emissions(**NOMINAL)
+    p = assess(r, cap_tco2e=r.total_emissions - 500, carbon_price_idr_per_ton=35200.0)
+    _, permitted = build_prompt(r, p, FORECAST, select_clauses(is_compliant=False))
+    bad = "Nilai potensial mencapai Rp 12-miliar untuk proyek ini."
+    assert unsupported_numerals(bad, permitted) != set()
+
+
+def test_hyphenated_digit_and_magnitude_word_is_caught_no_unit_word():
+    """Re-reviewer repro #3 -- critically, this sentence has no trailing unit
+    word ("ton"/"rupiah"/etc.) for `_SPELLED_OUT_NUMBER_NEAR_UNIT` to latch
+    onto, so it can only be caught if `_DIGIT_THEN_MAGNITUDE` itself is
+    separator-robust, not by a coincidental second match."""
+    r = calculate_emissions(**NOMINAL)
+    p = assess(r, cap_tco2e=r.total_emissions - 500, carbon_price_idr_per_ton=35200.0)
+    _, permitted = build_prompt(r, p, FORECAST, select_clauses(is_compliant=False))
+    bad = "Sebanyak 50-ribu akan dibeli."
+    assert unsupported_numerals(bad, permitted) != set()
+
+
+def test_unrelated_digit_and_magnitude_word_far_apart_are_not_linked():
+    """A deliberate false-positive check: a genuine, unrelated digit and a
+    genuine, unrelated magnitude word can both appear in the same sentence
+    without being flagged as a single fabricated quantity, as long as they
+    are not actually adjacent (joined by only whitespace/dash punctuation).
+    The joiner is bounded to 3 characters precisely so it cannot leap across
+    a whole clause to link two unrelated numbers -- a guard that fires on
+    ordinary Indonesian prose is worse than a leaky one."""
+    r = calculate_emissions(**NOMINAL)
+    p = assess(r, cap_tco2e=r.total_emissions - 500, carbon_price_idr_per_ton=35200.0)
+    _, permitted = build_prompt(r, p, FORECAST, select_clauses(is_compliant=False))
+    good = (
+        "Total emisi tercatat 12 pada laporan awal, sedangkan investasi "
+        "diperkirakan mencapai puluhan juta untuk proyek berikutnya."
+    )
+    assert unsupported_numerals(good, permitted) == set()
