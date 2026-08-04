@@ -65,3 +65,14 @@ def test_nan_is_rejected():
     assert "NaN" in body  # guard: json.dumps emits the bare NaN literal
     r = client.post("/emissions", content=body, headers={"content-type": "application/json"})
     assert r.status_code == 422
+
+
+def test_positive_infinity_is_rejected():
+    # wetOreInputTons has only a lower bound (ge=0): +inf satisfies "ge=0" on
+    # its own, so this specifically exercises allow_inf_nan=False rather than
+    # the range check -- unlike moistureContentPct, which is also bounded
+    # above and would reject NaN/Infinity through le=1 regardless.
+    body = json.dumps({**PAYLOAD, "wetOreInputTons": float("inf")})
+    assert "Infinity" in body  # guard: json.dumps emits the bare Infinity literal
+    r = client.post("/emissions", content=body, headers={"content-type": "application/json"})
+    assert r.status_code == 422

@@ -1,15 +1,11 @@
 """FastAPI application. Route registration only -- logic lives in modules."""
 
-import math
-from typing import Any
-
-from fastapi import FastAPI, Request
-from fastapi.encoders import jsonable_encoder
+from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 
 from .emissions.calculator import calculate_emissions
+from .errors import validation_exception_handler
 from .schemas import EmissionRequest, EmissionResponse
 
 app = FastAPI(title="SmartSmelt ERP API", version="2.0")
@@ -22,32 +18,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-def _sanitize_non_finite(obj: Any) -> Any:
-    """Replace NaN/Infinity with their str() form so json.dumps(allow_nan=False)
-    (Starlette's default for JSONResponse) can still render the body.
-
-    Pydantic's error detail echoes back the rejected input verbatim, so a
-    request containing a literal NaN produces an error payload that itself
-    contains a NaN float. Without this, rendering the 422 response raises
-    ValueError and the client sees an opaque 500 instead of the validation
-    error that caused it.
-    """
-    if isinstance(obj, float) and not math.isfinite(obj):
-        return str(obj)
-    if isinstance(obj, dict):
-        return {k: _sanitize_non_finite(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_sanitize_non_finite(v) for v in obj]
-    return obj
-
-
-@app.exception_handler(RequestValidationError)
-async def _validation_exception_handler(
-    request: Request, exc: RequestValidationError
-) -> JSONResponse:
-    content = _sanitize_non_finite(jsonable_encoder({"detail": exc.errors()}))
-    return JSONResponse(status_code=422, content=content)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
 
 
 @app.post("/emissions", response_model=EmissionResponse)
