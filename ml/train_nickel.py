@@ -49,6 +49,23 @@ def main() -> None:
     )
     model.fit(series)
 
+    # Provenance travels with the pickle itself, not just the filename, so
+    # the "SYNTHETIC" fact survives a copy/rename that drops the filename
+    # marker (e.g. a deploy step that normalises artifact names). Task 11
+    # reads this attribute by name to surface a synthetic flag downstream.
+    model.carbonatix_provenance = {
+        "synthetic": True,
+        "generated_on": "2026-08-04",
+        "generator": "ml/generate_synthetic_prices.py",
+        "seed": 20260804,
+        "source_csv": "ml/data/price_history_SYNTHETIC.csv",
+        "warning": (
+            "SYNTHETIC DATA - NOT REAL MARKET PRICES. Must be replaced "
+            "before any published result or presentation. See "
+            "ml/DATA_PROVENANCE.md"
+        ),
+    }
+
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_bytes(pickle.dumps(model))
     print(

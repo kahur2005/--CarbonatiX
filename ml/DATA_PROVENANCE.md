@@ -78,6 +78,46 @@ done. Once real prices are in place, backtest properly: hold out the
 last 30 days, refit on the remainder, compute MAPE against the held-out
 real observations, and record it here or in a successor to this file.
 
+## Provenance marker embedded in the pickles
+
+The filename `_SYNTHETIC` suffix is not the only marker: a filename can be
+lost if an artifact is copied or renamed (for example by a deploy step
+that normalises artifact names, or by a later task "fixing" what looks
+like a broken path). To survive that, both training scripts attach a
+provenance record directly to the fitted `Prophet` object before pickling
+it, under the attribute name **`carbonatix_provenance`** (identical in
+`ml/train_nickel.py` and `ml/train_carbon.py` -- do not let the two
+scripts diverge on this name, since Task 11 reads it by name from either
+artifact):
+
+```python
+model.carbonatix_provenance = {
+    "synthetic": True,
+    "generated_on": "2026-08-04",
+    "generator": "ml/generate_synthetic_prices.py",
+    "seed": 20260804,
+    "source_csv": "ml/data/price_history_SYNTHETIC.csv",
+    "warning": "SYNTHETIC DATA - NOT REAL MARKET PRICES. Must be replaced "
+    "before any published result or presentation. See "
+    "ml/DATA_PROVENANCE.md",
+}
+```
+
+This survives `pickle.dumps`/`pickle.loads` as a plain attribute on the
+model instance -- verified by round-tripping both artifacts through
+`pickle.loads` and asserting `model.carbonatix_provenance["synthetic"] is
+True` (see `task-10-report.md` for the output). Task 11 can and should
+read `model.carbonatix_provenance` when it loads these artifacts and
+surface a synthetic flag in whatever it serves.
+
+**When real data replaces this series**, `carbonatix_provenance` must be
+updated or removed from the newly-trained model, not left in place still
+claiming `synthetic: True`. The cleanest approach is for the real-data
+version of the training scripts to simply not set the attribute at all
+(so `getattr(model, "carbonatix_provenance", None)` is `None`/absent),
+or to set `"synthetic": False` explicitly if a positive real-data marker
+is useful downstream.
+
 ## What must be swapped in, and where
 
 Before any forecast, demo, or published result from this project is
@@ -97,6 +137,9 @@ presented as real:
      `_SYNTHETIC` suffix).
    - Remove the "TRAINED ON SYNTHETIC DATA" docstring warnings and the
      stderr warning prints, since they will no longer be true.
+   - Remove (or flip to `"synthetic": False`) the `carbonatix_provenance`
+     attribute assignment described above, so the real-data artifacts do
+     not carry a pickled claim of being synthetic.
 4. Re-run both training scripts to produce real artifacts, and commit
    `nickel_lme.pkl` and `idx_carbon.pkl` in place of the `_SYNTHETIC`
    ones. Delete the `_SYNTHETIC` artifacts and CSV once the real versions
