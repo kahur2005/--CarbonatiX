@@ -1,9 +1,12 @@
 """FastAPI application. Route registration only -- logic lives in modules."""
 
-from fastapi import FastAPI
+from uuid import UUID
+
+from fastapi import Depends, FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
+from .auth import current_user_id
 from .emissions.calculator import calculate_emissions
 from .errors import validation_exception_handler
 from .schemas import EmissionRequest, EmissionResponse
@@ -44,3 +47,11 @@ def post_emissions(req: EmissionRequest) -> EmissionResponse:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/company")
+def get_company(user_id: UUID = Depends(current_user_id)) -> dict[str, str]:
+    """Placeholder protected route. Replaced with the real company lookup
+    once the database-backed handler lands; exists here only so there is a
+    protected endpoint for the auth dependency to guard."""
+    return {"userId": str(user_id)}

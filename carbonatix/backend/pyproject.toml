@@ -22,3 +22,13 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection idiom is `param: T = Depends(fn)` -- the call
+# is evaluated once per request by FastAPI's own machinery, not at import
+# time, so B008's "function call in default argument" warning is a false
+# positive here. Ruff's built-in exemption for this pattern only fires when
+# the parameter is annotated with a handful of builtin scalar types; every
+# protected route in this project annotates its user id as `UUID`, which
+# falls outside that heuristic, so it must be listed explicitly.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Header"]
