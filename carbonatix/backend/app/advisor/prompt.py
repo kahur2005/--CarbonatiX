@@ -17,6 +17,53 @@ __all__ = ["build_prompt", "has_placeholder_text", "unsupported_numerals"]
 
 _NUMERAL = re.compile(r"\d[\d.,]*")
 
+# Marks a `permitted` entry as a citation reference rather than a supplied
+# figure. Never collides with a real numeral: entries produced from figures
+# are pure digit/separator strings, so a letter-prefixed marker is always
+# distinguishable. See `unsupported_numerals` for how these gate citation
+# spans instead of permitting the ref's digits everywhere in the output.
+_CITATION_PREFIX = "ref::"
+
+# Indonesian magnitude words. A digit immediately followed by one of these
+# multiplies its plain value by 1,000/1,000,000/etc., so "50 ribu" claims
+# 50,000 while only ever showing the guard the two-digit, ordinarily-exempt
+# token "50". Any occurrence is flagged outright -- none of this module's own
+# figures are ever expressed this way, so there is no legitimate use to
+# protect.
+_MAGNITUDE_WORDS = ("ribu", "juta", "miliar", "triliun")
+
+# Indonesian digit/compounding words, for detecting a quantity spelled out
+# entirely in words (e.g. "lima puluh ribu" = "fifty thousand") next to a
+# unit. Deliberately not parsed into a value -- rejecting an unparseable
+# spelled-out quantity and escalating to a human is the correct outcome.
+_DIGIT_WORDS = (
+    "nol",
+    "satu",
+    "dua",
+    "tiga",
+    "empat",
+    "lima",
+    "enam",
+    "tujuh",
+    "delapan",
+    "sembilan",
+)
+_NUMBER_WORD_PARTS = (*_DIGIT_WORDS, "puluh", "ratus", "belas", *_MAGNITUDE_WORDS)
+_UNIT_WORDS = ("tco2e", "ton", "rupiah", "rp")
+
+_DIGIT_THEN_MAGNITUDE = re.compile(
+    r"\d[\d.,]*\s*(?:" + "|".join(_MAGNITUDE_WORDS) + r")\b", re.IGNORECASE
+)
+# A run of 1-8 number-word tokens immediately followed by a unit -- e.g.
+# "lima puluh ribu ton". Requiring unit-adjacency (rather than flagging any
+# lone digit word) keeps ordinary prose containing "dua" or "satu" as an
+# ordinal/pronoun from being flagged.
+_SPELLED_OUT_NUMBER_NEAR_UNIT = re.compile(
+    r"(?:\b(?:" + "|".join(_NUMBER_WORD_PARTS) + r")\b[\s,]*){1,8}"
+    r"(?:" + "|".join(_UNIT_WORDS) + r")\b",
+    re.IGNORECASE,
+)
+
 _TEMPLATE = """Anda adalah penasihat kepatuhan karbon untuk smelter nikel RKEF di Indonesia.
 
 ANGKA YANG TERSEDIA (gunakan HANYA angka-angka ini; jangan menghitung atau mengarang angka lain):
@@ -30,6 +77,10 @@ posisi karbon terhadap harga pasar, dengan rujukan pasal yang tepat.
 
 Aturan mutlak:
 - Jangan menyebut angka apa pun yang tidak ada dalam daftar di atas.
+- Tulis setiap kuantitas sebagai digit mentah saja (contoh: 50000), TANPA
+  kata pengali seperti "ribu", "juta", "miliar", atau "triliun", dan TANPA
+  angka yang dieja dengan huruf (contoh: "lima puluh ribu"). Bentuk selain
+  digit mentah akan ditolak sistem.
 - Kutip pasal persis seperti tertulis. Jangan memparafrasa klausa hukum.
 - Nyatakan secara eksplisit bahwa PLTU captive saat ini di luar cakupan wajib
   PTBAE-PU, sehingga status ini bersifat kesiapan, bukan pelanggaran berlaku.
@@ -80,6 +131,13 @@ def _canonical(token: str) -> str:
         return "0"
 
     def is_thousands_grouping(parts: list[str]) -> bool:
+        # A one-digit leading group (e.g. "0,125") is ambiguous: it reads
+        # equally well as a thousands-shaped grouping or as a leading zero
+        # before a decimal fraction. This treats it as grouping, which can
+        # only cause a genuinely tiny fractional value to be over-flagged as
+        # unsupported -- never the reverse, since over-flagging never lets a
+        # fabricated figure through -- so it is left as documented behaviour
+        # rather than special-cased.
         if len(parts) < 2 or not all(p.isdigit() for p in parts):
             return False
         return len(parts[0]) in (1, 2, 3) and all(len(p) == 3 for p in parts[1:])
@@ -138,11 +196,16 @@ def build_prompt(
 
     permitted = {v for v in figures.values()}
     permitted |= {_canonical(v) for v in figures.values()}
-    # Article numbers appearing in the citations (e.g. "16" and "2022" in
-    # "Permen ESDM 16/2022") are legitimate numerals the model may repeat
-    # when naming a clause, and must not be flagged.
+    # Article numbers appearing in a citation (e.g. "16" and "2022" in
+    # "Permen ESDM 16/2022") are legitimate numerals when they are actually
+    # part of that citation -- but permitting them everywhere in the output
+    # would let a fabricated quantity that happens to match an article
+    # number (e.g. a made-up "110 ton") launder through unchecked. So the
+    # ref text itself is recorded here, tagged with `_CITATION_PREFIX`, and
+    # `unsupported_numerals` only exempts a numeral that falls inside an
+    # actual occurrence of the ref text in the output -- never globally.
     for c in clauses:
-        permitted |= {_canonical(m) for m in _NUMERAL.findall(c.ref)}
+        permitted.add(f"{_CITATION_PREFIX}{c.ref}")
 
     text = _TEMPLATE.format(
         figures=figures_block,
@@ -152,13 +215,61 @@ def build_prompt(
     return text, permitted
 
 
+def _citation_spans(output: str, permitted: set[str]) -> list[tuple[int, int]]:
+    """Character ranges in `output` that are an actual occurrence of a
+    clause's `ref` text, so numerals that are genuinely part of a citation
+    (e.g. "18" in "...Pasal 18") are excluded from the numeral scan without
+    exempting that digit sequence anywhere else it appears."""
+    refs = [p[len(_CITATION_PREFIX) :] for p in permitted if p.startswith(_CITATION_PREFIX)]
+    spans = []
+    for ref in refs:
+        start = 0
+        while (idx := output.find(ref, start)) != -1:
+            spans.append((idx, idx + len(ref)))
+            start = idx + len(ref)
+    return spans
+
+
+def _within_any_span(start: int, end: int, spans: list[tuple[int, int]]) -> bool:
+    return any(s <= start and end <= e for s, e in spans)
+
+
 def unsupported_numerals(output: str, permitted: set[str]) -> set[str]:
     """Numerals in the output that were not supplied. Non-empty means the
-    recommendation is flagged, not shipped as advice."""
-    found = set()
-    for token in _NUMERAL.findall(output):
+    recommendation is flagged, not shipped as advice.
+
+    Three checks, all outside any genuine citation span (see
+    `_citation_spans`):
+
+    1. A digit sequence with no supplied match, three or more digits long
+       (see the length-skip note below).
+    2. A digit immediately followed by an Indonesian magnitude word
+       ("ribu"/"juta"/"miliar"/"triliun") -- flagged regardless of digit
+       count, since this is exactly how a fabricated figure hides behind
+       the two-digit exemption (e.g. "50 ribu" reads as the harmless "50").
+    3. A quantity spelled out entirely in Indonesian number words next to a
+       unit (e.g. "lima puluh ribu ton") -- flagged as a whole rather than
+       parsed, since an unparseable spelled-out quantity should be rejected
+       and escalated to a human, not guessed at.
+    """
+    figures = {p for p in permitted if not p.startswith(_CITATION_PREFIX)}
+    spans = _citation_spans(output, permitted)
+    found: set[str] = set()
+
+    for match in _DIGIT_THEN_MAGNITUDE.finditer(output):
+        if not _within_any_span(match.start(), match.end(), spans):
+            found.add(match.group().strip())
+
+    for match in _SPELLED_OUT_NUMBER_NEAR_UNIT.finditer(output):
+        if not _within_any_span(match.start(), match.end(), spans):
+            found.add(match.group().strip())
+
+    for match in _NUMERAL.finditer(output):
+        if _within_any_span(match.start(), match.end(), spans):
+            continue
+        token = match.group()
         canonical = _canonical(token)
-        if token in permitted or canonical in permitted:
+        if token in figures or canonical in figures:
             continue
         # Single- and double-digit numbers are ordinals, dates and list
         # markers far more often than fabricated quantities. Counted on
@@ -168,4 +279,5 @@ def unsupported_numerals(output: str, permitted: set[str]) -> set[str]:
         if len(canonical.replace(".", "")) <= 2:
             continue
         found.add(token)
+
     return found

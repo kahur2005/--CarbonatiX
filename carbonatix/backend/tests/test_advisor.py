@@ -152,12 +152,84 @@ def test_fabricated_number_in_indonesian_thousands_format_is_still_caught():
     assert unsupported_numerals(bad, permitted) != set()
 
 
-def test_article_numbers_in_citation_are_not_flagged():
-    """Article/regulation numbers (e.g. '2022' in 'Permen ESDM 16/2022') are
-    legitimate numerals the model may repeat when naming a clause."""
+def test_article_numbers_in_a_genuine_citation_are_not_flagged():
+    """A numeral that is genuinely part of a citation -- the full `ref` text
+    appearing verbatim in the output, exactly as the prompt's own clause
+    block renders it (`[ref] title`) -- must not be flagged."""
     r = calculate_emissions(**NOMINAL)
     p = assess(r, cap_tco2e=r.total_emissions - 500, carbon_price_idr_per_ton=35200.0)
     clauses = select_clauses(is_compliant=False)
     _, permitted = build_prompt(r, p, FORECAST, clauses)
-    good = "Lihat Permen ESDM 16/2022 mengenai sanksi kuota."
+    ref = next(c.ref for c in clauses if c.ref == "Permen ESDM 16/2022 Pasal 18")
+    good = f"Sesuai [{ref}], sanksi pemotongan kuota berlaku."
+    assert unsupported_numerals(good, permitted) == set()
+
+
+# -- Citation numerals must not be permitted globally ------------------------
+
+
+def test_citation_numeral_does_not_launder_a_fabricated_quantity_elsewhere():
+    """A regulation year/number (e.g. '2025' from 'Perpres 110/2025', '110'
+    from the same ref) must only be exempt where it is genuinely part of a
+    citation -- not anywhere in the output. Otherwise a fabricated tonnage
+    that happens to match an article number passes for free."""
+    r = calculate_emissions(**NOMINAL)
+    p = assess(r, cap_tco2e=r.total_emissions - 500, carbon_price_idr_per_ton=35200.0)
+    clauses = select_clauses(is_compliant=False)
+    assert any(c.ref == "Perpres 110/2025" for c in clauses)
+    _, permitted = build_prompt(r, p, FORECAST, clauses)
+
+    bad_year = "Kami merekomendasikan pembelian 2025 ton kredit karbon tambahan."
+    assert "2025" in unsupported_numerals(bad_year, permitted)
+
+    bad_article = "Kami merekomendasikan pembelian 110 ton kredit karbon tambahan."
+    assert "110" in unsupported_numerals(bad_article, permitted)
+
+
+# -- Indonesian magnitude words and spelled-out numbers -----------------------
+
+
+def test_digit_followed_by_magnitude_word_is_caught():
+    """'50 ribu' claims 50,000 while showing the guard only the two-digit,
+    ordinarily-exempt token '50'. The digit+magnitude-word combination must
+    be flagged regardless of the digit count."""
+    r = calculate_emissions(**NOMINAL)
+    p = assess(r, cap_tco2e=r.total_emissions - 500, carbon_price_idr_per_ton=35200.0)
+    _, permitted = build_prompt(r, p, FORECAST, select_clauses(is_compliant=False))
+    bad = "Kami merekomendasikan pembelian 50 ribu ton kredit karbon."
+    assert unsupported_numerals(bad, permitted) != set()
+
+
+def test_digit_followed_by_miliar_is_caught():
+    """'Rp 12 miliar' -- a two-digit figure that the ordinal/date exemption
+    would ordinarily wave through -- must still be flagged once a magnitude
+    word turns it into a claimed twelve billion rupiah."""
+    r = calculate_emissions(**NOMINAL)
+    p = assess(r, cap_tco2e=r.total_emissions - 500, carbon_price_idr_per_ton=35200.0)
+    _, permitted = build_prompt(r, p, FORECAST, select_clauses(is_compliant=False))
+    bad = "Nilai potensial mencapai Rp 12 miliar."
+    assert unsupported_numerals(bad, permitted) != set()
+
+
+def test_fully_spelled_out_number_near_unit_is_caught():
+    """'lima puluh ribu ton' contains no digits at all, so the guard must
+    recognise the spelled-out quantity next to its unit and flag it as
+    unparseable rather than silently pass it through."""
+    r = calculate_emissions(**NOMINAL)
+    p = assess(r, cap_tco2e=r.total_emissions - 500, carbon_price_idr_per_ton=35200.0)
+    _, permitted = build_prompt(r, p, FORECAST, select_clauses(is_compliant=False))
+    bad = "Kami merekomendasikan pembelian lima puluh ribu ton kredit karbon."
+    assert unsupported_numerals(bad, permitted) != set()
+
+
+def test_ordinary_prose_without_any_quantity_is_not_flagged():
+    """Guard against the fix making the check useless: prose that mentions no
+    figure at all, spelled out or otherwise, must not be flagged."""
+    r = calculate_emissions(**NOMINAL)
+    p = assess(r, cap_tco2e=r.total_emissions - 500, carbon_price_idr_per_ton=35200.0)
+    _, permitted = build_prompt(r, p, FORECAST, select_clauses(is_compliant=False))
+    good = (
+        "Posisi karbon perusahaan saat ini berada dalam kondisi defisit dan "
+        "memerlukan tindakan strategis segera untuk menjaga kepatuhan."
+    )
     assert unsupported_numerals(good, permitted) == set()
