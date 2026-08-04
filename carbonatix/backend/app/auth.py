@@ -2,9 +2,16 @@
 
 The browser calls this service directly carrying the Supabase access token,
 so this module is the only thing standing between the internet and a user's
-data. Every failure mode returns 401 with no detail: a caller who supplied a
-bad token learns nothing about why -- not whether the signature failed, the
-token expired, or the secret is missing.
+data. Every *caller* error -- missing header, wrong scheme, bad signature,
+expired token, wrong audience, malformed or absent ``sub`` -- returns 401
+with the same generic detail and a ``WWW-Authenticate: Bearer`` header: a
+caller who supplied a bad token learns nothing about which check failed.
+
+The one exception is a missing ``SUPABASE_JWT_SECRET``, which returns 500
+instead of 401. That is deliberate: it is operator misconfiguration, not
+something the caller did, so it does not belong on the same "learns nothing"
+guarantee as the caller-facing paths above -- and the 500 still leaks nothing
+beyond the bare fact that auth is unconfigured.
 
 Assumes the Supabase project signs access tokens with HS256 against a shared
 secret (``SUPABASE_JWT_SECRET``). Supabase's newer projects can instead issue
@@ -22,6 +29,10 @@ from jose import JWTError, jwt
 
 __all__ = ["current_user_id"]
 
+# Shared across every request (not constructed per-call), so it must stay
+# immutable: anything that needs to vary per request (a dynamic header, a
+# different detail) requires building a new HTTPException, not mutating this
+# one in place.
 _UNAUTHORIZED = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED,
     detail="Not authenticated",

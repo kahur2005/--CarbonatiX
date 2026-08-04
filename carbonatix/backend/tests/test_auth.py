@@ -78,6 +78,18 @@ def test_rejects_valid_signature_with_non_uuid_sub():
     assert r.status_code == 401
 
 
+def test_rejects_wrong_audience():
+    # Correct secret, unexpired, otherwise well-formed -- but minted for a
+    # different audience (e.g. Supabase's own "anon" role token rather than
+    # an authenticated user's access token). Guards the `audience=` argument
+    # to jwt.decode: if a future edit ever drops it, this is the test that
+    # would catch a token meant for someone else being accepted here.
+    exp = datetime.now(UTC) + timedelta(hours=1)
+    t = jwt.encode({"sub": str(uuid.uuid4()), "exp": exp, "aud": "anon"}, SECRET, algorithm="HS256")
+    r = client.get("/company", headers={"Authorization": f"Bearer {t}"})
+    assert r.status_code == 401
+
+
 def test_rejects_token_missing_sub_claim():
     exp = datetime.now(UTC) + timedelta(hours=1)
     t = jwt.encode({"exp": exp, "aud": "authenticated"}, SECRET, algorithm="HS256")
