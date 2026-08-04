@@ -12,6 +12,7 @@ dependencies = [
     "anthropic>=0.40",
     "prophet>=1.1.6",
     "pandas>=2.2",
+    "python-multipart>=0.0.12",
 ]
 
 [project.optional-dependencies]
@@ -31,4 +32,4 @@ line-length = 100
 # the parameter is annotated with a handful of builtin scalar types; every
 # protected route in this project annotates its user id as `UUID`, which
 # falls outside that heuristic, so it must be listed explicitly.
-extend-immutable-calls = ["fastapi.Depends", "fastapi.Header"]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Header", "fastapi.File", "fastapi.Form"]

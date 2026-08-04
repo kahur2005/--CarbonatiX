@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -11,6 +11,8 @@ from .auth import current_user_id
 from .emissions.calculator import calculate_emissions
 from .errors import validation_exception_handler
 from .forecasting.service import ForecastUnavailable, current_forecast
+from .ingestion.mapping import to_candidates
+from .ingestion.vision import ExtractionFailed, extract
 from .schemas import (
     CompanyRequest,
     CompanyResponse,
@@ -103,3 +105,27 @@ async def post_run(op: OperationalRequest, user_id: UUID = Depends(current_user_
 @app.get("/runs/{run_id}", response_model=RunResponse)
 async def get_run(run_id: UUID, user_id: UUID = Depends(current_user_id)) -> RunResponse:
     return await runs.get(user_id, run_id)
+
+
+@app.post("/documents")
+async def post_document(
+    file: UploadFile = File(...),
+    profile: str = Form(...),
+    user_id: UUID = Depends(current_user_id),
+) -> dict:
+    """Extract candidates from an uploaded document. Returns candidates for
+    the user to review; writes nothing to `companies` or
+    `calculation_runs` -- see `app/ingestion/mapping.py` for why a
+    `Candidate` cannot become a stored value without a separate, explicit
+    user action that this route does not perform.
+    """
+    if profile not in ("site_spec", "operational"):
+        raise HTTPException(status_code=422, detail="Unknown document profile")
+    try:
+        raw = await extract(await file.read(), file.content_type or "image/jpeg", profile)
+    except ExtractionFailed as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not read the document. Enter the values manually.",
+        ) from exc
+    return {"candidates": [c.__dict__ for c in to_candidates(raw, profile)]}
