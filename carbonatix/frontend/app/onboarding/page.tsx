@@ -7,10 +7,28 @@ import { putCompany, postSuggestCap } from "@/lib/api";
 import {
   buildCompanyInput,
   buildSuggestCapInput,
+  CAP_HELPER_RANGES,
   computeImpliedIntensity,
+  SITE_SPEC_RANGES,
+  validateFields,
   type CapHelperFormValues,
   type SiteSpecFormValues,
 } from "@/lib/onboarding";
+
+/** Backstop for a `RangeError` that reaches an API call despite the
+ * `validateFields` check that should have caught it first (see
+ * `handleCalculateCap` / `handleSubmit`) -- e.g. `toFraction` inside
+ * `buildCompanyInput`/`buildSuggestCapInput` throwing on a value this
+ * page's own range table didn't anticipate. A raw `RangeError.message` is
+ * an English sentence ("Percentage must be between 0 and 100, got 150")
+ * and must never reach this Bahasa Indonesia UI verbatim. */
+const RANGE_ERROR_FALLBACK_ID =
+  "Salah satu nilai persentase di luar rentang 0-100%. Periksa kembali bidang yang diisi.";
+
+function describeError(err: unknown, fallback: string): string {
+  if (err instanceof RangeError) return RANGE_ERROR_FALLBACK_ID;
+  return err instanceof Error ? err.message : fallback;
+}
 
 /** Candidate.field (snake_case, the backend wire value -- see
  * `app/ingestion/mapping.py`'s `FIELDS_BY_PROFILE["site_spec"]`) -> this
@@ -138,12 +156,17 @@ export default function OnboardingPage() {
       reductionTargetPercent: toNumber(helper.reductionTargetPercent),
     };
 
-    if (Object.values(parsed).some((v) => !Number.isFinite(v))) {
-      setHelper((prev) => ({
-        ...prev,
-        pending: false,
-        error: "Isi semua bidang interval dengan angka yang valid.",
-      }));
+    const rangeError = validateFields([
+      [parsed.wetOreInputTons, CAP_HELPER_RANGES.wetOreInputTons],
+      [parsed.moistureContentPercent, CAP_HELPER_RANGES.moistureContentPercent],
+      [parsed.nickelGradePercent, CAP_HELPER_RANGES.nickelGradePercent],
+      [parsed.reductantBiocokePercent, CAP_HELPER_RANGES.reductantBiocokePercent],
+      [parsed.powerMixCaptiveCoalPercent, CAP_HELPER_RANGES.powerMixCaptiveCoalPercent],
+      [parsed.powerMixHydroGridPercent, CAP_HELPER_RANGES.powerMixHydroGridPercent],
+      [parsed.reductionTargetPercent, CAP_HELPER_RANGES.reductionTargetPercent],
+    ]);
+    if (rangeError) {
+      setHelper((prev) => ({ ...prev, pending: false, error: rangeError }));
       return;
     }
     if (Math.abs(captive + hydro - 100) > 0.01) {
@@ -168,7 +191,7 @@ export default function OnboardingPage() {
       setHelper((prev) => ({
         ...prev,
         pending: false,
-        error: err instanceof Error ? err.message : "Gagal menghitung kuota.",
+        error: describeError(err, "Gagal menghitung kuota."),
       }));
     }
   }
@@ -188,17 +211,16 @@ export default function OnboardingPage() {
       capTco2e: toNumber(form.capTco2e),
     };
 
-    const numericFields: [string, number][] = [
-      ["Faktor emisi PLTU captive", parsed.efCaptivePltu],
-      ["Efisiensi termal dryer", parsed.dryerThermalEfficiencyPercent],
-      ["Energi spesifik EAF", parsed.secEafKwhPerTAlloy],
-      ["Kadar nikel alloy", parsed.alloyNickelGradePercent],
-      ["Efisiensi termal kiln", parsed.kilnThermalEfficiencyPercent],
-      ["Kuota karbon", parsed.capTco2e],
-    ];
-    const invalid = numericFields.find(([, v]) => !Number.isFinite(v));
-    if (invalid) {
-      setSubmitError(`Isi "${invalid[0]}" dengan angka yang valid.`);
+    const rangeError = validateFields([
+      [parsed.efCaptivePltu, SITE_SPEC_RANGES.efCaptivePltu],
+      [parsed.dryerThermalEfficiencyPercent, SITE_SPEC_RANGES.dryerThermalEfficiencyPercent],
+      [parsed.secEafKwhPerTAlloy, SITE_SPEC_RANGES.secEafKwhPerTAlloy],
+      [parsed.alloyNickelGradePercent, SITE_SPEC_RANGES.alloyNickelGradePercent],
+      [parsed.kilnThermalEfficiencyPercent, SITE_SPEC_RANGES.kilnThermalEfficiencyPercent],
+      [parsed.capTco2e, SITE_SPEC_RANGES.capTco2e],
+    ]);
+    if (rangeError) {
+      setSubmitError(rangeError);
       return;
     }
 
@@ -207,9 +229,7 @@ export default function OnboardingPage() {
       await putCompany(buildCompanyInput(parsed));
       router.push("/twin");
     } catch (err) {
-      setSubmitError(
-        err instanceof Error ? err.message : "Gagal menyimpan profil perusahaan.",
-      );
+      setSubmitError(describeError(err, "Gagal menyimpan profil perusahaan."));
       setSubmitting(false);
     }
   }
@@ -283,7 +303,7 @@ export default function OnboardingPage() {
                   id="dryerThermalEfficiency"
                   type="number"
                   step="any"
-                  min={0}
+                  min={0.0001}
                   max={100}
                   required
                   value={form.dryerThermalEfficiencyPercent}
@@ -316,7 +336,7 @@ export default function OnboardingPage() {
                   id="alloyNickelGrade"
                   type="number"
                   step="any"
-                  min={0}
+                  min={0.0001}
                   max={100}
                   required
                   value={form.alloyNickelGradePercent}
@@ -333,7 +353,7 @@ export default function OnboardingPage() {
                   id="kilnThermalEfficiency"
                   type="number"
                   step="any"
-                  min={0}
+                  min={0.0001}
                   max={100}
                   required
                   value={form.kilnThermalEfficiencyPercent}
@@ -490,7 +510,7 @@ export default function OnboardingPage() {
                       type="number"
                       step="any"
                       min={0}
-                      max={99.9}
+                      max={100}
                       value={helper.reductionTargetPercent}
                       onChange={(e) => setHelperField("reductionTargetPercent", e.target.value)}
                       className={NUMBER_INPUT_CLASS}

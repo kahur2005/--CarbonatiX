@@ -3,8 +3,13 @@ import {
   buildCompanyInput,
   buildSuggestCapInput,
   candidateDisplayValue,
+  CAP_HELPER_RANGES,
   computeImpliedIntensity,
+  SITE_SPEC_RANGES,
+  validateFields,
+  validateRange,
   type CapHelperFormValues,
+  type FieldRange,
   type SiteSpecFormValues,
 } from "./onboarding";
 
@@ -99,5 +104,92 @@ describe("candidateDisplayValue", () => {
 
   it("leaves a non-percentage field unchanged", () => {
     expect(candidateDisplayValue(450, false)).toBe(450);
+  });
+});
+
+describe("validateRange", () => {
+  const inclusive: FieldRange = { label: "Kadar air", unit: "%", min: 0, max: 100 };
+  const exclusiveMin: FieldRange = {
+    label: "Efisiensi termal dryer",
+    unit: "%",
+    min: 0,
+    minExclusive: true,
+    max: 100,
+  };
+  const exclusiveMax: FieldRange = {
+    label: "Target penurunan dari baseline",
+    unit: "%",
+    min: 0,
+    max: 100,
+    maxExclusive: true,
+  };
+
+  it("accepts a value within an inclusive range, including both endpoints", () => {
+    expect(validateRange(0, inclusive)).toBeNull();
+    expect(validateRange(100, inclusive)).toBeNull();
+    expect(validateRange(50, inclusive)).toBeNull();
+  });
+
+  it("names the field and range in an Indonesian message when out of range", () => {
+    expect(validateRange(150, inclusive)).toBe('"Kadar air" harus maksimal 100%.');
+    expect(validateRange(-1, inclusive)).toBe('"Kadar air" harus minimal 0%.');
+  });
+
+  it("rejects a non-finite value with an Indonesian message, never a raw exception string", () => {
+    expect(validateRange(NaN, inclusive)).toBe('Isi "Kadar air" dengan angka yang valid.');
+  });
+
+  it("rejects exactly the exclusive-min boundary (the finding-2 case: 0% dryer efficiency)", () => {
+    expect(validateRange(0, exclusiveMin)).toBe(
+      '"Efisiensi termal dryer" harus lebih dari 0%.',
+    );
+    expect(validateRange(0.0001, exclusiveMin)).toBeNull();
+  });
+
+  it("rejects exactly the exclusive-max boundary (100% reduction target)", () => {
+    expect(validateRange(100, exclusiveMax)).toBe(
+      '"Target penurunan dari baseline" harus kurang dari 100%.',
+    );
+    expect(validateRange(99.9, exclusiveMax)).toBeNull();
+  });
+});
+
+describe("validateFields", () => {
+  it("returns the first failing field's message, not a later one", () => {
+    const result = validateFields([
+      [50, { label: "A", min: 0, max: 100 }],
+      [150, { label: "B", min: 0, max: 100 }],
+      [-1, { label: "C", min: 0, max: 100 }],
+    ]);
+    expect(result).toBe('"B" harus maksimal 100.');
+  });
+
+  it("returns null when every field is in range", () => {
+    const result = validateFields([
+      [50, { label: "A", min: 0, max: 100 }],
+      [0, { label: "B", min: 0, max: 100 }],
+    ]);
+    expect(result).toBeNull();
+  });
+});
+
+describe("SITE_SPEC_RANGES / CAP_HELPER_RANGES reject the finding-2 zero case", () => {
+  it("rejects 0% for every field the backend requires strictly > 0", () => {
+    expect(validateRange(0, SITE_SPEC_RANGES.dryerThermalEfficiencyPercent)).not.toBeNull();
+    expect(validateRange(0, SITE_SPEC_RANGES.alloyNickelGradePercent)).not.toBeNull();
+    expect(validateRange(0, SITE_SPEC_RANGES.kilnThermalEfficiencyPercent)).not.toBeNull();
+  });
+
+  it("accepts 0 for fields the backend allows to be zero", () => {
+    expect(validateRange(0, SITE_SPEC_RANGES.efCaptivePltu)).toBeNull();
+    expect(validateRange(0, SITE_SPEC_RANGES.secEafKwhPerTAlloy)).toBeNull();
+    expect(validateRange(0, SITE_SPEC_RANGES.capTco2e)).toBeNull();
+    expect(validateRange(0, CAP_HELPER_RANGES.wetOreInputTons)).toBeNull();
+    expect(validateRange(0, CAP_HELPER_RANGES.moistureContentPercent)).toBeNull();
+  });
+
+  it("rejects a 100% reduction target but accepts anything strictly below it", () => {
+    expect(validateRange(100, CAP_HELPER_RANGES.reductionTargetPercent)).not.toBeNull();
+    expect(validateRange(99, CAP_HELPER_RANGES.reductionTargetPercent)).toBeNull();
   });
 });
