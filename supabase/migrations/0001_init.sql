@@ -71,6 +71,10 @@ create table public.forecasts (
     unique (generated_on, horizon_days)
 );
 
+-- Row-level security: second line of defence for JWT-scoped clients (PostgREST, supabase-js).
+-- NOT active for the FastAPI backend, which connects as postgres superuser and bypasses RLS.
+-- Tenant isolation for the backend depends entirely on handler-level user_id filtering,
+-- enforced by tests rather than by the database.
 alter table public.companies          enable row level security;
 alter table public.calculation_runs   enable row level security;
 alter table public.recommendations    enable row level security;
