@@ -5,8 +5,9 @@ from uuid import UUID
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
-from . import companies, runs
+from . import companies, recommendation, runs
 from .auth import current_user_id
 from .emissions.calculator import calculate_emissions
 from .errors import validation_exception_handler
@@ -107,6 +108,21 @@ async def post_run(op: OperationalRequest, user_id: UUID = Depends(current_user_
 @app.get("/runs/{run_id}", response_model=RunResponse)
 async def get_run(run_id: UUID, user_id: UUID = Depends(current_user_id)) -> RunResponse:
     return await runs.get(user_id, run_id)
+
+
+@app.get("/runs/{run_id}/recommendation")
+async def get_recommendation(
+    run_id: UUID, user_id: UUID = Depends(current_user_id)
+) -> StreamingResponse:
+    """Stream the four-stage recommendation pipeline as SSE. `load` runs
+    before the streaming response is constructed so a missing/foreign run
+    resolves to a plain 404 (see recommendation.py for why that ordering
+    is load-bearing, not stylistic)."""
+    result, position, forecast = await recommendation.load(user_id, run_id)
+    return StreamingResponse(
+        recommendation.format_stream(result, position, forecast),
+        media_type="text/event-stream",
+    )
 
 
 @app.post("/documents", response_model=DocumentExtractionResponse)
