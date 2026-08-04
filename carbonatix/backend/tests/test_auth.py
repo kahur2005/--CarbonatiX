@@ -46,12 +46,14 @@ def test_protected_route_rejects_expired_token():
     assert r.status_code == 401
 
 
-def test_protected_route_accepts_valid_token():
+def test_protected_route_accepts_valid_token(fake_db):
+    # A valid token clears the auth dependency and reaches the real
+    # database-backed handler; this fresh user has no company profile yet,
+    # so the route itself reports 404, not 401 -- confirming auth passed.
     user_id = str(uuid.uuid4())
     t = _token(user_id)
     r = client.get("/company", headers={"Authorization": f"Bearer {t}"})
-    assert r.status_code == 200
-    assert r.json()["userId"] == user_id
+    assert r.status_code == 404
 
 
 def test_401_carries_no_detail_about_failure_reason():

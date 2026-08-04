@@ -6,11 +6,20 @@ from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
+from . import companies, runs
 from .auth import current_user_id
 from .emissions.calculator import calculate_emissions
 from .errors import validation_exception_handler
 from .forecasting.service import ForecastUnavailable, current_forecast
-from .schemas import EmissionRequest, EmissionResponse
+from .schemas import (
+    CompanyRequest,
+    CompanyResponse,
+    EmissionRequest,
+    EmissionResponse,
+    OperationalRequest,
+    RunResponse,
+    SuggestCapRequest,
+)
 
 app = FastAPI(title="SmartSmelt ERP API", version="2.0")
 
@@ -63,9 +72,34 @@ async def get_forecasts(horizon_days: int = Query(default=30, ge=1, le=30)) -> d
         ) from exc
 
 
-@app.get("/company")
-def get_company(user_id: UUID = Depends(current_user_id)) -> dict[str, str]:
-    """Placeholder protected route. Replaced with the real company lookup
-    once the database-backed handler lands; exists here only so there is a
-    protected endpoint for the auth dependency to guard."""
-    return {"userId": str(user_id)}
+@app.get("/company", response_model=CompanyResponse)
+async def get_company(user_id: UUID = Depends(current_user_id)) -> CompanyResponse:
+    row = await companies.fetch(user_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="No company profile")
+    return companies.to_response(row)
+
+
+@app.put("/company")
+async def put_company(
+    req: CompanyRequest, user_id: UUID = Depends(current_user_id)
+) -> dict[str, str]:
+    await companies.save(user_id, req)
+    return {"status": "saved"}
+
+
+@app.post("/company/suggest-cap")
+async def post_suggest_cap(
+    req: SuggestCapRequest, user_id: UUID = Depends(current_user_id)
+) -> dict:
+    return await runs.suggest_cap(user_id, req)
+
+
+@app.post("/runs", status_code=status.HTTP_201_CREATED, response_model=RunResponse)
+async def post_run(op: OperationalRequest, user_id: UUID = Depends(current_user_id)) -> RunResponse:
+    return await runs.commit(user_id, op)
+
+
+@app.get("/runs/{run_id}", response_model=RunResponse)
+async def get_run(run_id: UUID, user_id: UUID = Depends(current_user_id)) -> RunResponse:
+    return await runs.get(user_id, run_id)

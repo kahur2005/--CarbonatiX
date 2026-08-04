@@ -83,8 +83,72 @@ class EmissionResponse(_Camel):
 
 
 class CompliancePositionResponse(_Camel):
-    cap_tco2e: float
-    projected_tco2e: float
-    position_tco2e: float
+    # Explicit aliases below: pydantic's to_camel alias generator capitalizes
+    # any letter immediately following a digit (a "v2_api" -> "v2Api"
+    # heuristic), which mangles "_tco2e" into "Tco2E" instead of "Tco2e".
+    # Confirmed via `pydantic.alias_generators.to_camel("cap_tco2e")` ->
+    # "capTco2E". Pinned explicitly wherever "tco2e" appears on the wire.
+    cap_tco2e: float = Field(alias="capTco2e")
+    projected_tco2e: float = Field(alias="projectedTco2e")
+    position_tco2e: float = Field(alias="positionTco2e")
     is_compliant: bool
     position_value_idr: float
+
+
+class CompanyRequest(_Camel):
+    name: str = Field(min_length=1, max_length=200)
+    technology: str = "RKEF"
+    ef_captive_pltu: float = Field(ge=0, allow_inf_nan=False)
+    dryer_thermal_efficiency: float = Field(gt=0, le=1, allow_inf_nan=False)
+    sec_eaf_kwh_per_t_alloy: float = Field(ge=0, allow_inf_nan=False)
+    alloy_nickel_grade: float = Field(gt=0, le=1, allow_inf_nan=False)
+    kiln_thermal_efficiency: float = Field(gt=0, le=1, allow_inf_nan=False)
+    # Absolute allocation in tCO2e for the period, not derived from ore
+    # volume. alias= pinned explicitly -- see CompliancePositionResponse for
+    # why the auto-generated alias for a "_tco2e" field cannot be trusted.
+    cap_tco2e: float = Field(ge=0, allow_inf_nan=False, alias="capTco2e")
+
+
+class CompanyResponse(_Camel):
+    name: str
+    technology: str
+    ef_captive_pltu: float
+    dryer_thermal_efficiency: float
+    sec_eaf_kwh_per_t_alloy: float
+    alloy_nickel_grade: float
+    kiln_thermal_efficiency: float
+    cap_tco2e: float = Field(alias="capTco2e")
+
+
+class OperationalRequest(_Camel):
+    """Per-interval levers. Site-spec values come from the stored company."""
+
+    wet_ore_input_tons: float = Field(ge=0, allow_inf_nan=False)
+    moisture_content_pct: float = Field(ge=0, le=1, allow_inf_nan=False)
+    nickel_grade_pct: float = Field(ge=0, le=1, allow_inf_nan=False)
+    reductant_biocoke_pct: float = Field(ge=0, le=1, allow_inf_nan=False)
+    power_mix_captive_coal: float = Field(ge=0, le=1, allow_inf_nan=False)
+    power_mix_hydro_grid: float = Field(ge=0, le=1, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def _power_mix_sums_to_one(self) -> "OperationalRequest":
+        total = self.power_mix_captive_coal + self.power_mix_hydro_grid
+        if abs(total - 1.0) > 1e-9:
+            raise ValueError(
+                f"power mix shares must sum to 1, got captive "
+                f"{self.power_mix_captive_coal} + hydro/grid "
+                f"{self.power_mix_hydro_grid} = {total}"
+            )
+        return self
+
+
+class SuggestCapRequest(OperationalRequest):
+    reduction_target: float = Field(ge=0, lt=1, allow_inf_nan=False)
+
+
+class RunResponse(_Camel):
+    id: str
+    result: EmissionResponse
+    compliance: CompliancePositionResponse
+    forecast_snapshot: dict
+    created_at: str
