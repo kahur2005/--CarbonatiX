@@ -18,7 +18,12 @@ detected and surfaced rather than silently passed through as real law.
 """
 
 from app.advisor.corpus import CORPUS, PLACEHOLDER_SENTINEL, has_placeholder_text, select_clauses
-from app.advisor.prompt import build_prompt, unsupported_numerals
+from app.advisor.prompt import (
+    _DIGIT_THEN_MAGNITUDE,
+    _spelled_out_number_matches,
+    build_prompt,
+    unsupported_numerals,
+)
 from app.emissions.calculator import calculate_emissions
 from app.emissions.compliance import assess
 
@@ -197,6 +202,7 @@ def test_digit_followed_by_magnitude_word_is_caught():
     p = assess(r, cap_tco2e=r.total_emissions - 500, carbon_price_idr_per_ton=35200.0)
     _, permitted = build_prompt(r, p, FORECAST, select_clauses(is_compliant=False))
     bad = "Kami merekomendasikan pembelian 50 ribu ton kredit karbon."
+    assert _DIGIT_THEN_MAGNITUDE.search(bad) is not None
     assert unsupported_numerals(bad, permitted) != set()
 
 
@@ -208,6 +214,7 @@ def test_digit_followed_by_miliar_is_caught():
     p = assess(r, cap_tco2e=r.total_emissions - 500, carbon_price_idr_per_ton=35200.0)
     _, permitted = build_prompt(r, p, FORECAST, select_clauses(is_compliant=False))
     bad = "Nilai potensial mencapai Rp 12 miliar."
+    assert _DIGIT_THEN_MAGNITUDE.search(bad) is not None
     assert unsupported_numerals(bad, permitted) != set()
 
 
@@ -219,6 +226,7 @@ def test_fully_spelled_out_number_near_unit_is_caught():
     p = assess(r, cap_tco2e=r.total_emissions - 500, carbon_price_idr_per_ton=35200.0)
     _, permitted = build_prompt(r, p, FORECAST, select_clauses(is_compliant=False))
     bad = "Kami merekomendasikan pembelian lima puluh ribu ton kredit karbon."
+    assert list(_spelled_out_number_matches(bad))
     assert unsupported_numerals(bad, permitted) != set()
 
 
@@ -235,40 +243,126 @@ def test_ordinary_prose_without_any_quantity_is_not_flagged():
     assert unsupported_numerals(good, permitted) == set()
 
 
-# -- Digit-magnitude-word joiner must survive ordinary punctuation, not just
-# -- whitespace: a hyphen between a digit and "ribu"/"miliar" is an ordinary
-# -- Indonesian compound, not an exotic bypass attempt. -----------------------
+# -- Digit-magnitude-word joiner: a hyphen *with no surrounding whitespace*
+# -- is an ordinary Indonesian compound ("50-ribu") and must be caught; a
+# -- dash *with* surrounding whitespace is clause punctuation ("12 - ribu",
+# -- an article number followed by an unrelated clause) and must not be
+# -- mistaken for one. Round 3 found the first joiner widening conflated the
+# -- two; these tests pin both directions down, asserting on
+# -- `_DIGIT_THEN_MAGNITUDE`/`_spelled_out_number_matches` directly where
+# -- possible so a match credited to the wrong rule cannot pass silently
+# -- again. -------------------------------------------------------------
 
 
 def test_hyphenated_digit_and_magnitude_word_is_caught_kredit_karbon():
-    """Re-reviewer repro #1: a hyphen (not whitespace) between the digit and
-    the magnitude word must not defeat the guard."""
+    """Round-2 repro #1: a hyphen with no surrounding whitespace between the
+    digit and the magnitude word must not defeat the guard."""
     r = calculate_emissions(**NOMINAL)
     p = assess(r, cap_tco2e=r.total_emissions - 500, carbon_price_idr_per_ton=35200.0)
     _, permitted = build_prompt(r, p, FORECAST, select_clauses(is_compliant=False))
     bad = "Kami merekomendasikan pembelian 50-ribu kredit karbon tambahan."
+    assert _DIGIT_THEN_MAGNITUDE.search(bad) is not None
     assert unsupported_numerals(bad, permitted) != set()
 
 
 def test_hyphenated_digit_and_magnitude_word_is_caught_rp_miliar():
-    """Re-reviewer repro #2."""
+    """Round-2 repro #2."""
     r = calculate_emissions(**NOMINAL)
     p = assess(r, cap_tco2e=r.total_emissions - 500, carbon_price_idr_per_ton=35200.0)
     _, permitted = build_prompt(r, p, FORECAST, select_clauses(is_compliant=False))
     bad = "Nilai potensial mencapai Rp 12-miliar untuk proyek ini."
+    assert _DIGIT_THEN_MAGNITUDE.search(bad) is not None
     assert unsupported_numerals(bad, permitted) != set()
 
 
 def test_hyphenated_digit_and_magnitude_word_is_caught_no_unit_word():
-    """Re-reviewer repro #3 -- critically, this sentence has no trailing unit
-    word ("ton"/"rupiah"/etc.) for `_SPELLED_OUT_NUMBER_NEAR_UNIT` to latch
-    onto, so it can only be caught if `_DIGIT_THEN_MAGNITUDE` itself is
+    """Round-2 repro #3 -- critically, this sentence has no trailing unit
+    word ("ton"/"rupiah"/etc.) for the spelled-out-number rule to latch onto,
+    so it can only be caught if `_DIGIT_THEN_MAGNITUDE` itself is
     separator-robust, not by a coincidental second match."""
     r = calculate_emissions(**NOMINAL)
     p = assess(r, cap_tco2e=r.total_emissions - 500, carbon_price_idr_per_ton=35200.0)
     _, permitted = build_prompt(r, p, FORECAST, select_clauses(is_compliant=False))
     bad = "Sebanyak 50-ribu akan dibeli."
+    assert _DIGIT_THEN_MAGNITUDE.search(bad) is not None
+    assert not list(_spelled_out_number_matches(bad))
     assert unsupported_numerals(bad, permitted) != set()
+
+
+def test_en_dash_digit_and_magnitude_word_is_caught():
+    """The dash-family character class covers more than the ASCII hyphen --
+    an en dash with no surrounding whitespace must be caught the same way."""
+    r = calculate_emissions(**NOMINAL)
+    p = assess(r, cap_tco2e=r.total_emissions - 500, carbon_price_idr_per_ton=35200.0)
+    _, permitted = build_prompt(r, p, FORECAST, select_clauses(is_compliant=False))
+    bad = "Kami merekomendasikan pembelian 50–ribu kredit karbon tambahan."
+    assert _DIGIT_THEN_MAGNITUDE.search(bad) is not None
+    assert unsupported_numerals(bad, permitted) != set()
+
+
+def test_double_space_digit_and_magnitude_word_is_caught():
+    """The whitespace form of the joiner allows up to three spaces/tabs, not
+    just exactly one."""
+    r = calculate_emissions(**NOMINAL)
+    p = assess(r, cap_tco2e=r.total_emissions - 500, carbon_price_idr_per_ton=35200.0)
+    _, permitted = build_prompt(r, p, FORECAST, select_clauses(is_compliant=False))
+    bad = "Kami merekomendasikan pembelian 50  ribu ton kredit karbon."
+    assert _DIGIT_THEN_MAGNITUDE.search(bad) is not None
+    assert unsupported_numerals(bad, permitted) != set()
+
+
+def test_spaced_dash_after_article_number_is_not_a_compound():
+    """Round-3 false positive #1: 'Pasal 12 - ribu ...' is an article number
+    followed by dash-punctuation and an unrelated clause, not a '12-ribu'
+    compound. The surrounding spaces on the dash must disqualify it."""
+    r = calculate_emissions(**NOMINAL)
+    p = assess(r, cap_tco2e=r.total_emissions - 500, carbon_price_idr_per_ton=35200.0)
+    _, permitted = build_prompt(r, p, FORECAST, select_clauses(is_compliant=False))
+    good = "Sesuai Pasal 12 - ribu pelaku usaha akan mendapat sanksi administratif."
+    assert _DIGIT_THEN_MAGNITUDE.search(good) is None
+    assert unsupported_numerals(good, permitted) == set()
+
+
+def test_spaced_dash_with_bare_juta_rupiah_is_not_flagged():
+    """Round-3 false positive #2: 'ayat 18 - juta rupiah ...' must not match
+    the digit+magnitude rule (spaced dash is punctuation, not a compound),
+    and 'juta rupiah' alone -- a bare magnitude word next to its unit, with
+    no counting word -- must not be treated as a genuine spelled-out
+    quantity either."""
+    r = calculate_emissions(**NOMINAL)
+    p = assess(r, cap_tco2e=r.total_emissions - 500, carbon_price_idr_per_ton=35200.0)
+    _, permitted = build_prompt(r, p, FORECAST, select_clauses(is_compliant=False))
+    good = "Merujuk pada ayat 18 - juta rupiah adalah nilai pasar acuan yang berbeda konteks."
+    assert _DIGIT_THEN_MAGNITUDE.search(good) is None
+    assert not list(_spelled_out_number_matches(good))
+    assert unsupported_numerals(good, permitted) == set()
+
+
+def test_paragraph_break_does_not_bridge_digit_to_magnitude_word():
+    """A blank line between a digit and a magnitude word is a paragraph
+    break, not a compound -- the old unbounded `\\s*` joiner let `"5000"`
+    and `"juta rupiah"` on either side of it be read as one fabricated
+    figure. `permitted` is crafted here (rather than taken from a real
+    `build_prompt` call) so the check isolates this one behaviour: whether
+    "5000" -- a value assumed supplied -- gets wrongly linked across the
+    blank line to the unrelated "juta rupiah" that follows it."""
+    permitted = {"5000", "5000.0"}
+    text = "Total produksi mencapai 5000\n\njuta rupiah dialokasikan untuk program CSR."
+    assert _DIGIT_THEN_MAGNITUDE.search(text) is None
+    assert not list(_spelled_out_number_matches(text))
+    assert unsupported_numerals(text, permitted) == set()
+
+
+def test_suffixed_magnitude_word_is_not_flagged_by_word_boundary():
+    """'jutaan' ('millions', with the '-an' suffix) is not the bare word
+    'juta', and must not match either the digit+magnitude rule or the
+    spelled-out-number rule. Locked in as its own test so a future widening
+    of either pattern cannot silently reintroduce a match here."""
+    permitted = {"2024"}
+    text = "pada 2024 pemerintah menaikkan target hingga jutaan ton"
+    assert _DIGIT_THEN_MAGNITUDE.search(text) is None
+    assert not list(_spelled_out_number_matches(text))
+    assert unsupported_numerals(text, permitted) == set()
 
 
 def test_unrelated_digit_and_magnitude_word_far_apart_are_not_linked():
@@ -286,4 +380,5 @@ def test_unrelated_digit_and_magnitude_word_far_apart_are_not_linked():
         "Total emisi tercatat 12 pada laporan awal, sedangkan investasi "
         "diperkirakan mencapai puluhan juta untuk proyek berikutnya."
     )
+    assert _DIGIT_THEN_MAGNITUDE.search(good) is None
     assert unsupported_numerals(good, permitted) == set()

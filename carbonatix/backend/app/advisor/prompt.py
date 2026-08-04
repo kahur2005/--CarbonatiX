@@ -51,17 +51,28 @@ _DIGIT_WORDS = (
 _NUMBER_WORD_PARTS = (*_DIGIT_WORDS, "puluh", "ratus", "belas", *_MAGNITUDE_WORDS)
 _UNIT_WORDS = ("tco2e", "ton", "rupiah", "rp")
 
-# A short, bounded run of whitespace and/or dash-family characters -- the
-# punctuation Indonesian actually uses to join a digit to the word right
-# after it (hyphenated compounds like "50-ribu" are ordinary, not exotic).
-# `\s` already covers space/tab/newline/non-breaking space; the dash
-# characters are added explicitly since they are not whitespace. Bounded to
-# at most 3 characters and excluding sentence punctuation (period, comma
-# used as a separator is already consumed by the digit run itself, "!",
-# "?") so this can join a digit to an *immediately adjacent* word, never
-# leap across a clause or sentence boundary to a coincidental, unrelated
-# occurrence of a magnitude word.
-_DIGIT_MAGNITUDE_JOINER = r"[\s\-‐‑‒–—―]{0,3}"
+# The punctuation that may sit between a digit and the magnitude word right
+# after it, restricted to the two forms that are actually a compound rather
+# than ordinary sentence punctuation:
+#
+# 1. Up to three spaces/tabs -- catches "50 ribu" and "50  ribu". Newlines
+#    are deliberately excluded: a blank line (e.g. a paragraph break between
+#    "...5000" and "juta rupiah...") is not a compound, and `\s` would
+#    otherwise bridge it.
+# 2. A single dash character (ASCII hyphen or a Unicode dash-family
+#    character) with *no whitespace on either side* -- catches "50-ribu" and
+#    "50–ribu" (en dash). A dash surrounded by spaces, as in Indonesian
+#    legal prose like "Pasal 12 - ribu pelaku usaha...", is punctuation
+#    separating two unrelated clauses, not a compound, and must not match.
+#
+# These two forms are deliberately not merged into one bounded character
+# class: a class like `[\s-]{0,3}` cannot distinguish "50-ribu" (compound)
+# from "12 - ribu" (an article number followed by dash-punctuation and an
+# unrelated word) because both are made of the same characters -- only the
+# presence or absence of surrounding whitespace tells them apart, and an
+# alternation is what lets the regex insist on "no whitespace at all" for
+# the dash form specifically.
+_DIGIT_MAGNITUDE_JOINER = r"(?:[ \t]{0,3}|[\-‐‑‒–—―])"
 
 _DIGIT_THEN_MAGNITUDE = re.compile(
     r"\d[\d.,]*" + _DIGIT_MAGNITUDE_JOINER + r"(?:" + "|".join(_MAGNITUDE_WORDS) + r")\b",
@@ -76,6 +87,36 @@ _SPELLED_OUT_NUMBER_NEAR_UNIT = re.compile(
     r"(?:" + "|".join(_UNIT_WORDS) + r")\b",
     re.IGNORECASE,
 )
+
+# The "counting" words -- as opposed to the multiplier/magnitude words --
+# used to tell a genuine spelled-out quantity apart from a bare magnitude
+# word sitting next to its unit. "juta rupiah" ("millions of rupiah") is
+# ordinary order-of-magnitude language with no specific value asserted; a
+# real spelled-out quantity like "lima puluh ribu ton" always contains at
+# least one of these in addition to the magnitude word.
+_COUNTING_WORDS = frozenset((*_DIGIT_WORDS, "puluh", "ratus", "belas"))
+
+
+def _is_genuine_spelled_out_number(match_text: str) -> bool:
+    tokens = re.findall(r"[^\W\d_]+", match_text.lower())
+    return any(t in _COUNTING_WORDS for t in tokens)
+
+
+def _spelled_out_number_matches(output: str):
+    """The subset of raw `_SPELLED_OUT_NUMBER_NEAR_UNIT` regex matches that
+    are a genuine spelled-out quantity (see `_is_genuine_spelled_out_number`)
+    rather than a bare magnitude word next to its unit.
+
+    Exposed as its own function, rather than inlined into
+    `unsupported_numerals`, specifically so a test can assert on this rule
+    in isolation instead of only on `unsupported_numerals`'s aggregate
+    output -- a match credited to the wrong rule has passed review before,
+    and asserting at the rule level is what catches that.
+    """
+    for match in _SPELLED_OUT_NUMBER_NEAR_UNIT.finditer(output):
+        if _is_genuine_spelled_out_number(match.group()):
+            yield match
+
 
 _TEMPLATE = """Anda adalah penasihat kepatuhan karbon untuk smelter nikel RKEF di Indonesia.
 
@@ -263,7 +304,9 @@ def unsupported_numerals(output: str, permitted: set[str]) -> set[str]:
     3. A quantity spelled out entirely in Indonesian number words next to a
        unit (e.g. "lima puluh ribu ton") -- flagged as a whole rather than
        parsed, since an unparseable spelled-out quantity should be rejected
-       and escalated to a human, not guessed at.
+       and escalated to a human, not guessed at. A bare magnitude word next
+       to its unit with no counting word ("juta rupiah") is excluded --
+       see `_is_genuine_spelled_out_number`.
     """
     figures = {p for p in permitted if not p.startswith(_CITATION_PREFIX)}
     spans = _citation_spans(output, permitted)
@@ -273,7 +316,7 @@ def unsupported_numerals(output: str, permitted: set[str]) -> set[str]:
         if not _within_any_span(match.start(), match.end(), spans):
             found.add(match.group().strip())
 
-    for match in _SPELLED_OUT_NUMBER_NEAR_UNIT.finditer(output):
+    for match in _spelled_out_number_matches(output):
         if not _within_any_span(match.start(), match.end(), spans):
             found.add(match.group().strip())
 
