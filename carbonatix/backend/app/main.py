@@ -2,13 +2,14 @@
 
 from uuid import UUID
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from .auth import current_user_id
 from .emissions.calculator import calculate_emissions
 from .errors import validation_exception_handler
+from .forecasting.service import ForecastUnavailable, current_forecast
 from .schemas import EmissionRequest, EmissionResponse
 
 app = FastAPI(title="SmartSmelt ERP API", version="2.0")
@@ -47,6 +48,19 @@ def post_emissions(req: EmissionRequest) -> EmissionResponse:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/forecasts")
+async def get_forecasts(horizon_days: int = Query(default=30, ge=1, le=30)) -> dict:
+    """Pre-trained price forecasts. See app/forecasting/service.py for the
+    response shape and the synthetic-data provenance it carries."""
+    try:
+        return await current_forecast(horizon_days)
+    except ForecastUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Price forecast is temporarily unavailable",
+        ) from exc
 
 
 @app.get("/company")
