@@ -14,8 +14,10 @@ from .forecasting.service import ForecastUnavailable, current_forecast
 from .ingestion.mapping import to_candidates
 from .ingestion.vision import ExtractionFailed, extract
 from .schemas import (
+    CandidateResponse,
     CompanyRequest,
     CompanyResponse,
+    DocumentExtractionResponse,
     EmissionRequest,
     EmissionResponse,
     OperationalRequest,
@@ -107,25 +109,36 @@ async def get_run(run_id: UUID, user_id: UUID = Depends(current_user_id)) -> Run
     return await runs.get(user_id, run_id)
 
 
-@app.post("/documents")
+@app.post("/documents", response_model=DocumentExtractionResponse)
 async def post_document(
     file: UploadFile = File(...),
     profile: str = Form(...),
     user_id: UUID = Depends(current_user_id),
-) -> dict:
+) -> DocumentExtractionResponse:
     """Extract candidates from an uploaded document. Returns candidates for
     the user to review; writes nothing to `companies` or
     `calculation_runs` -- see `app/ingestion/mapping.py` for why a
     `Candidate` cannot become a stored value without a separate, explicit
     user action that this route does not perform.
+
+    `extract` and `to_candidates` both run inside the same `try`: a
+    malformed *document* (extraction fails outright) and a malformed
+    *field* within an otherwise-readable document (a hostile leaf value
+    `to_candidates` cannot make sense of) must both fall through to the
+    same "could not read, enter manually" response rather than an
+    unhandled 500 -- see `mapping.sanitize_leaf` for the field-level half
+    of that guarantee; this `try` is the belt-and-braces half.
     """
     if profile not in ("site_spec", "operational"):
         raise HTTPException(status_code=422, detail="Unknown document profile")
     try:
         raw = await extract(await file.read(), file.content_type or "image/jpeg", profile)
+        candidates = to_candidates(raw, profile)
     except ExtractionFailed as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Could not read the document. Enter the values manually.",
         ) from exc
-    return {"candidates": [c.__dict__ for c in to_candidates(raw, profile)]}
+    return DocumentExtractionResponse(
+        candidates=[CandidateResponse(**c.__dict__) for c in candidates]
+    )

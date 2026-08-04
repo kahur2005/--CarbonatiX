@@ -118,6 +118,50 @@ def test_candidate_has_no_accepted_field_at_all():
     assert "accepted" not in field_names
 
 
+@pytest.mark.parametrize(
+    "hostile_value",
+    [
+        pytest.param("32", id="string"),
+        pytest.param({"nested": "object"}, id="nested-object"),
+        pytest.param([1, 2, 3], id="list"),
+        pytest.param(float("nan"), id="nan"),
+        pytest.param(float("inf"), id="positive-infinity"),
+        pytest.param(float("-inf"), id="negative-infinity"),
+        pytest.param(True, id="bool"),
+    ],
+)
+def test_to_candidates_never_raises_on_hostile_leaf_value(hostile_value):
+    """Regression test for a review finding: a string on a fraction field
+    (e.g. `"32"`) used to reach `_normalise`'s `value > 1.0` comparison
+    unguarded and raise `TypeError: '>' not supported between instances of
+    'str' and 'float'`. `NaN`/`Infinity` used to pass straight through as a
+    normal-looking value with the same 0.75 confidence as a clean read.
+    `to_candidates` must not raise on any of these, and must report every
+    one of them as unreadable (value=None, confidence=0.0) rather than a
+    confident-looking garbage value -- belt and braces on top of
+    `vision.extract`'s own sanitisation, in case a future caller ever
+    hands raw, unsanitised model output to this function directly."""
+    cands = to_candidates({"moisture_content_pct": hostile_value}, "operational")
+    assert cands[0].value is None
+    assert cands[0].confidence == 0.0
+
+
+def test_sanitize_leaf_accepts_only_finite_numbers_or_none():
+    from app.ingestion.mapping import sanitize_leaf
+
+    assert sanitize_leaf(None) is None
+    assert sanitize_leaf(32) == 32.0
+    assert sanitize_leaf(0.32) == 0.32
+    assert sanitize_leaf("32") is None
+    assert sanitize_leaf(True) is None
+    assert sanitize_leaf(False) is None
+    assert sanitize_leaf([1, 2]) is None
+    assert sanitize_leaf({"a": 1}) is None
+    assert sanitize_leaf(float("nan")) is None
+    assert sanitize_leaf(float("inf")) is None
+    assert sanitize_leaf(float("-inf")) is None
+
+
 # ---------------------------------------------------------------------------
 # vision.py -- Anthropic client is always mocked; never a real API call.
 # ---------------------------------------------------------------------------
@@ -289,6 +333,50 @@ async def test_extract_fails_loudly_when_api_key_missing(monkeypatch):
         await vision.extract(b"fake-bytes", "image/png", "operational")
 
 
+@pytest.mark.asyncio
+async def test_extract_reports_string_value_as_unreadable_not_a_raise(monkeypatch, anthropic_key):
+    """A model that prints a number as a quoted string must not have it
+    coerced (`"10000"` -> `10000.0`) -- that is a guess -- and must not
+    raise either. It is reported unreadable, same as a `null`."""
+    result, _ = await _extract_with_mocked_client(
+        monkeypatch, json.dumps({"wet_ore_input_tons": "10000"})
+    )
+    assert result["wet_ore_input_tons"] is None
+
+
+@pytest.mark.asyncio
+async def test_extract_reports_nested_object_as_unreadable(monkeypatch, anthropic_key):
+    result, _ = await _extract_with_mocked_client(
+        monkeypatch, json.dumps({"wet_ore_input_tons": {"value": 10000, "unit": "t"}})
+    )
+    assert result["wet_ore_input_tons"] is None
+
+
+@pytest.mark.asyncio
+async def test_extract_reports_bool_value_as_unreadable(monkeypatch, anthropic_key):
+    """`true`/`false` must not be read as `1.0`/`0.0` -- Python's `bool` is
+    an `int` subclass and would otherwise slip past a naive numeric check."""
+    result, _ = await _extract_with_mocked_client(
+        monkeypatch, json.dumps({"wet_ore_input_tons": True})
+    )
+    assert result["wet_ore_input_tons"] is None
+
+
+@pytest.mark.asyncio
+async def test_extract_reports_nan_as_unreadable(monkeypatch, anthropic_key):
+    """`json.loads` accepts the bare `NaN` literal as a non-standard
+    extension; a model emitting one must not have it treated as a real
+    reading with a normal-looking confidence."""
+    result, _ = await _extract_with_mocked_client(monkeypatch, '{"wet_ore_input_tons": NaN}')
+    assert result["wet_ore_input_tons"] is None
+
+
+@pytest.mark.asyncio
+async def test_extract_reports_infinity_as_unreadable(monkeypatch, anthropic_key):
+    result, _ = await _extract_with_mocked_client(monkeypatch, '{"wet_ore_input_tons": Infinity}')
+    assert result["wet_ore_input_tons"] is None
+
+
 # ---------------------------------------------------------------------------
 # POST /documents -- returns candidates, persists nothing.
 # ---------------------------------------------------------------------------
@@ -349,6 +437,10 @@ def test_documents_returns_candidates_and_persists_nothing(monkeypatch):
     # mistaken for an already-written value.
     for c in body["candidates"]:
         assert "accepted" not in c
+    # Confidence is a flat constant, not model-derived -- the response says
+    # so explicitly rather than letting a frontend mistake 0.75 for a real
+    # per-field reliability score.
+    assert body["confidenceIsPlaceholder"] is True
 
 
 def test_documents_returns_502_when_extraction_fails(monkeypatch):
@@ -366,3 +458,61 @@ def test_documents_returns_502_when_extraction_fails(monkeypatch):
     )
     assert r.status_code == 502
     assert "manually" in r.text.lower()
+
+
+@pytest.mark.parametrize(
+    "hostile_value",
+    [
+        pytest.param("32", id="string"),
+        pytest.param({"nested": "object"}, id="nested-object"),
+        pytest.param([1, 2, 3], id="list"),
+        pytest.param(float("nan"), id="nan"),
+        pytest.param(float("inf"), id="positive-infinity"),
+        pytest.param(True, id="bool"),
+    ],
+)
+def test_documents_survives_hostile_leaf_value_from_extract(monkeypatch, hostile_value):
+    """Review finding, reproduced live: a malformed model response used to
+    reach `_normalise`'s `value > 1.0` comparison unguarded. A response of
+    `{"moisture_content_pct": "32", ...}` made that comparison raise
+    `TypeError: '>' not supported between instances of 'str' and 'float'`
+    *outside* the route's `try/except ExtractionFailed` (`to_candidates`
+    used to be called after the try block), so it propagated as a bare
+    500. Separately, a `NaN` value used to sail through `to_candidates`
+    with the same 0.75 confidence as a clean reading.
+
+    This test bypasses `vision.extract`'s own sanitisation entirely by
+    mocking `app.main.extract` to hand back the hostile value directly --
+    simulating "extract() has a bug" or "a future change reopens the raw
+    path" -- to prove the route's own defence (`to_candidates` inside the
+    try, `mapping.sanitize_leaf` inside that) holds independently. Must be
+    a 200 with the offending field marked unreadable, never a 500, and
+    never a confident-looking garbage value.
+    """
+
+    async def _fake_extract(file_bytes, media_type, profile):
+        return {
+            "wet_ore_input_tons": 10000.0,
+            "moisture_content_pct": hostile_value,
+            "nickel_grade_pct": None,
+            "reductant_biocoke_pct": None,
+            "power_mix_captive_coal": None,
+            "power_mix_hydro_grid": None,
+        }
+
+    monkeypatch.setattr("app.main.extract", _fake_extract)
+
+    r = client.post(
+        "/documents",
+        files={"file": ("report.png", b"fake", "image/png")},
+        data={"profile": "operational"},
+    )
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    hostile = next(c for c in body["candidates"] if c["field"] == "moisture_content_pct")
+    assert hostile["value"] is None
+    assert hostile["confidence"] == 0.0
+    clean = next(c for c in body["candidates"] if c["field"] == "wet_ore_input_tons")
+    assert clean["value"] == 10000.0
+    assert clean["confidence"] == 0.75

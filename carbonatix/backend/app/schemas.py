@@ -152,3 +152,33 @@ class RunResponse(_Camel):
     compliance: CompliancePositionResponse
     forecast_snapshot: dict
     created_at: str
+
+
+class CandidateResponse(_Camel):
+    """One extracted field awaiting user review. Deliberately carries no
+    "accepted" flag -- see `app/ingestion/mapping.py`'s `Candidate`, which
+    this mirrors field-for-field on the wire."""
+
+    field: str
+    value: float | None
+    confidence: float
+    node: str
+    source_hint: str = ""
+
+
+class DocumentExtractionResponse(_Camel):
+    """Response to POST /documents.
+
+    `confidence_is_placeholder` is always `True` today: the vision model
+    is never asked to self-report a per-field confidence, so every
+    candidate with a non-null value carries the same flat default
+    (`mapping.to_candidates`'s 0.75) regardless of how cleanly it was
+    actually read. This flag exists so a frontend cannot mistake that
+    constant for a real per-field reliability signal -- `confidence`
+    currently means only "the model returned something" vs "it did not",
+    not "the model was sure." Flip this to `False` only once confidence is
+    genuinely model-derived.
+    """
+
+    candidates: list[CandidateResponse]
+    confidence_is_placeholder: bool = True
