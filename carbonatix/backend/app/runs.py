@@ -16,12 +16,12 @@ import json
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from fastapi import HTTPException
+from fastapi import HTTPException, status
 
 from . import companies, db
 from .emissions.calculator import calculate_emissions
 from .emissions.compliance import assess, suggest_cap_from_baseline
-from .forecasting.service import current_forecast
+from .forecasting.service import ForecastUnavailable, current_forecast
 from .schemas import (
     CompliancePositionResponse,
     EmissionResponse,
@@ -72,7 +72,18 @@ async def commit(user_id: UUID, op: OperationalRequest) -> RunResponse:
     """
     company = await companies.require(user_id)
     result = _emissions_for(company, op)
-    forecast = await current_forecast()
+    try:
+        forecast = await current_forecast()
+    except ForecastUnavailable as exc:
+        # Same treatment as GET /forecasts (see main.py): a forecast-source
+        # outage is a temporary service problem, not a bug in this request,
+        # and it must not surface as an unhandled 500 on the one path that
+        # would otherwise persist a run with no price behind its compliance
+        # figure.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Price forecast is temporarily unavailable; run not committed.",
+        ) from exc
     position = assess(
         result,
         cap_tco2e=company["cap_tco2e"],

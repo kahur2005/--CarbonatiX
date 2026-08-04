@@ -7,7 +7,9 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
+from app import runs as runs_module
 from app.auth import current_user_id
+from app.forecasting.service import ForecastUnavailable
 from app.main import app
 
 USER = uuid.uuid4()
@@ -76,3 +78,19 @@ def test_suggest_cap_endpoint_uses_baseline(fake_db):
     r = client.post("/company/suggest-cap", json={**OPERATIONAL, "reductionTarget": 0.10})
     assert r.status_code == 200
     assert r.json()["capTco2e"] > 0
+
+
+def test_run_commit_returns_503_when_forecast_unavailable(fake_db, monkeypatch):
+    """Mirrors GET /forecasts' handling of the same exception (see
+    app/main.py): a forecast-source outage is a 503, never an unhandled 500,
+    even on the run-commit path where the failure is more consequential."""
+    client.put("/company", json=COMPANY)
+
+    async def _boom(*args, **kwargs):
+        raise ForecastUnavailable("artifact missing")
+
+    monkeypatch.setattr(runs_module, "current_forecast", _boom)
+
+    r = client.post("/runs", json=OPERATIONAL)
+    assert r.status_code == 503
+    assert "forecast" in r.text.lower()
