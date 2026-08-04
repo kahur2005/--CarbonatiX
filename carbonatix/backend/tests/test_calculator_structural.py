@@ -64,10 +64,45 @@ def test_emissions_rise_monotonically_with_ore():
         prev = r.total_emissions
 
 
+def test_biocoke_lever_alone_lowers_reductant_and_total():
+    """One of three levers behind the 28% spread at fixed production. Checked
+    in isolation so it cannot hide behind the other two, or behind the EAF
+    term, which is large enough on its own to satisfy a loose combined
+    threshold even if this lever were a no-op."""
+    base = calculate_emissions(**NOMINAL)
+    r = calculate_emissions(**{**NOMINAL, "reductant_biocoke_pct": 0.5})
+    assert r.nickel_output_tons == pytest.approx(base.nickel_output_tons, rel=1e-12)
+    assert r.kiln_reductant_emissions < base.kiln_reductant_emissions
+    assert r.total_emissions < base.total_emissions
+
+
+def test_power_mix_lever_alone_lowers_eaf_and_leaves_scope_1_untouched():
+    """Second lever, checked in isolation. Scope 1 must be exactly unchanged:
+    power mix only touches the EAF term."""
+    base = calculate_emissions(**NOMINAL)
+    r = calculate_emissions(**{**NOMINAL, "power_mix_captive_coal": 0.5})
+    assert r.nickel_output_tons == pytest.approx(base.nickel_output_tons, rel=1e-12)
+    assert r.eaf_emissions < base.eaf_emissions
+    assert r.scope_1 == pytest.approx(base.scope_1, rel=1e-12)
+
+
+def test_dryer_efficiency_lever_alone_lowers_dryer_and_leaves_kiln_heat_untouched():
+    """Third lever, checked in isolation. kiln_heat_emissions must be exactly
+    unchanged: it is driven by the kiln's own thermal efficiency constant,
+    not the dryer's, and this assertion catches the two being conflated."""
+    base = calculate_emissions(**NOMINAL)
+    r = calculate_emissions(**{**NOMINAL, "dryer_thermal_efficiency": 0.75})
+    assert r.nickel_output_tons == pytest.approx(base.nickel_output_tons, rel=1e-12)
+    assert r.dryer_emissions < base.dryer_emissions
+    assert r.kiln_heat_emissions == pytest.approx(base.kiln_heat_emissions, rel=1e-12)
+
+
 def test_levers_move_emissions_at_constant_nickel_output():
     """The 28% spread at fixed production is the entire reason this product
     exists. If emissions were a fixed multiple of tonnage there would be no
-    decision to support."""
+    decision to support. Each of the three levers is now also checked
+    individually above, so none of them can hide behind another, or behind
+    the EAF term, when only their combined effect is verified here."""
     base = calculate_emissions(**NOMINAL)
     best = calculate_emissions(
         **{
@@ -78,7 +113,7 @@ def test_levers_move_emissions_at_constant_nickel_output():
         }
     )
     assert best.nickel_output_tons == pytest.approx(base.nickel_output_tons, rel=1e-12)
-    assert best.total_emissions < base.total_emissions * 0.85
+    assert best.total_emissions < base.total_emissions * 0.75
 
 
 def test_scope_2_share_stays_in_calibration_corridor():
