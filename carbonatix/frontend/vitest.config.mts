@@ -21,5 +21,9 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: ["./vitest.setup.ts"],
+    // Task 20's Playwright suite lives in e2e/ and matches vitest's default
+    // *.spec.ts glob. It must never run under vitest -- it uses Playwright's
+    // own `test`/`expect`, not this project's jsdom-based unit test setup.
+    exclude: ["**/node_modules/**", "e2e/**"],
   },
 });
