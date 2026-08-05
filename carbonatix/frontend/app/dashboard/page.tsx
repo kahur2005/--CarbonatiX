@@ -74,11 +74,28 @@ function AdvisorSection({ runId }: { runId: string }) {
       try {
         for await (const event of streamRecommendation(runId, controller.signal)) {
           if (cancelled) return;
-          setStatuses((prev) => ({ ...prev, [event.stage]: event.status }));
-          if (event.stage === "verify" && event.status === "done" && isVerifyPayload(event.payload)) {
-            sawTerminalOutcome = true;
-            setVerify(event.payload);
+
+          // `verify`/`done` needs its payload validated *before* the node
+          // status is decided -- writing `event.status` ("done") through
+          // unconditionally first, then separately deciding whether to
+          // trust the payload, would leave the node green even when the
+          // payload is rejected below. A malformed payload is treated as
+          // its own terminal outcome: the node turns red and the panel
+          // falls back to "unavailable", never a silent green node sitting
+          // above a message that says there is nothing to show.
+          if (event.stage === "verify" && event.status === "done") {
+            if (isVerifyPayload(event.payload)) {
+              sawTerminalOutcome = true;
+              setVerify(event.payload);
+              setStatuses((prev) => ({ ...prev, verify: "done" }));
+            } else {
+              sawTerminalOutcome = true;
+              setStatuses((prev) => ({ ...prev, verify: "failed" }));
+            }
+            continue;
           }
+
+          setStatuses((prev) => ({ ...prev, [event.stage]: event.status }));
           // A failed `synthesise` is itself a terminal outcome for the
           // pipeline -- `run_pipeline` returns immediately after yielding
           // it and never sends `verify` (see `app/advisor/pipeline.py`).

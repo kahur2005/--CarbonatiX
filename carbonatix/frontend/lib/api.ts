@@ -151,7 +151,16 @@ export async function* streamRecommendation(
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      buffer += decoder.decode(value, { stream: true });
+      // `{ stream: true }` holds back a multi-byte UTF-8 sequence split
+      // across this chunk boundary until the rest of it arrives in the
+      // next `read()`, rather than decoding a truncated codepoint.
+      //
+      // `recommendation.format_stream` (this endpoint's only producer)
+      // always writes plain `\n\n`, but the SSE spec permits `\r\n\r\n`,
+      // and an intermediary proxy could rewrite line endings -- normalising
+      // every decoded chunk to LF-only before it joins `buffer` means the
+      // `"\n\n"` split below keeps matching either way.
+      buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
       let sepIndex = buffer.indexOf("\n\n");
       while (sepIndex !== -1) {
         const frame = buffer.slice(0, sepIndex);
@@ -167,6 +176,13 @@ export async function* streamRecommendation(
         sepIndex = buffer.indexOf("\n\n");
       }
     }
+    // Any bytes left in `buffer` here are an unterminated trailing partial
+    // frame (the stream ended mid-frame, with no closing `\n\n`) -- a
+    // deliberate accept-loss choice, not an oversight: every consumer of
+    // this generator already has to tolerate a stream ending without a
+    // terminal event for the in-flight stage (see
+    // `components/advisor/NodeGraph.tsx`), so a trailing partial frame is
+    // just one more way that happens, not a new failure mode to handle.
   } finally {
     reader.releaseLock();
   }

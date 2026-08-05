@@ -226,6 +226,36 @@ describe("DashboardPage", () => {
       expect(screen.getByText(PTBAE_DISCLOSURE)).toBeInTheDocument();
     });
 
+    it('marks the verify node "failed" (not "done") and shows the unavailable fallback when the verify/done payload does not actually match the expected shape', async () => {
+      vi.mocked(getRun).mockResolvedValue(RUN);
+      vi.mocked(streamRecommendation).mockReturnValue(
+        fakeStream([
+          stageEvent("retrieve", "done", { refs: [] }),
+          stageEvent("assemble", "done", { figureCount: 5 }),
+          stageEvent("synthesise", "done", { body: "..." }),
+          // `status: "done"` but a payload missing every field
+          // `isVerifyPayload` checks for -- a hypothetical backend bug
+          // must never be trusted into the UI as a real recommendation,
+          // and must never leave this node silently green while the panel
+          // says there is nothing to show.
+          stageEvent("verify", "done", { unexpected: "shape" }),
+        ]),
+      );
+
+      render(<DashboardPage />);
+
+      await screen.findByTestId("recommendation-unavailable");
+      expect(screen.getByTestId("node-verify")).toHaveAttribute("data-status", "failed");
+      expect(screen.getByTestId("recommendation-unavailable")).toHaveTextContent(
+        RECOMMENDATION_UNAVAILABLE_MESSAGE,
+      );
+      // The three prior stages, which genuinely did complete, are
+      // unaffected -- only the node whose payload was rejected turns red.
+      expect(screen.getByTestId("node-retrieve")).toHaveAttribute("data-status", "done");
+      expect(screen.getByTestId("node-assemble")).toHaveAttribute("data-status", "done");
+      expect(screen.getByTestId("node-synthesise")).toHaveAttribute("data-status", "done");
+    });
+
     it('shows the flagged warning instead of the body, and never renders the fabricated figure as if it were part of the recommendation text', async () => {
       vi.mocked(getRun).mockResolvedValue(RUN);
       vi.mocked(streamRecommendation).mockReturnValue(
