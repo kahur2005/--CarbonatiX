@@ -24,3 +24,44 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/*
+ * Chart color roles for the dashboard (app/dashboard). Values are the
+ * validated default categorical/status palette from the dataviz skill
+ * (see .superpowers dataviz skill's references/palette.md) -- slot order
+ * is the CVD-safety mechanism and must not be reshuffled. Scoped to
+ * `.viz-root` so chart code reads roles (`var(--chart-series-1)`, etc.)
+ * rather than raw hex, and the dark step-set swaps in one place.
+ */
+.viz-root {
+  --chart-surface: #fcfcfb;
+  --chart-text-primary: #0b0b0b;
+  --chart-text-secondary: #52514e;
+  --chart-muted: #898781;
+  --chart-gridline: #e1e0d9;
+  --chart-baseline: #c3c2b7;
+  --chart-series-1: #2a78d6; /* blue */
+  --chart-series-2: #eb6834; /* orange */
+  --chart-series-3: #1baf7a; /* aqua */
+  --chart-series-4: #eda100; /* yellow */
+  /* Status is a small fixed scale, never themed -- same steps in both
+     modes (see palette.md's status table). */
+  --chart-status-good: #0ca30c;
+  --chart-status-warning: #fab219;
+  --chart-status-critical: #d03b3b;
+}
+
+@media (prefers-color-scheme: dark) {
+  .viz-root {
+    --chart-surface: #1a1a19;
+    --chart-text-primary: #ffffff;
+    --chart-text-secondary: #c3c2b7;
+    --chart-muted: #898781;
+    --chart-gridline: #2c2c2a;
+    --chart-baseline: #383835;
+    --chart-series-1: #3987e5;
+    --chart-series-2: #d95926;
+    --chart-series-3: #199e70;
+    --chart-series-4: #c98500;
+  }
+}

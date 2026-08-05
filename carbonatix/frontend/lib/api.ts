@@ -11,6 +11,14 @@ import type {
   SuggestCapResult,
 } from "@/types/emissions";
 
+/** Thrown by `getRun` when the caller isn't authenticated, the run id
+ * doesn't exist, or it belongs to another tenant -- `app/runs.py`'s `get`
+ * returns a bare 404 for the latter two cases indistinguishably (see its
+ * docstring: a leaked run id from another tenant must not resolve here
+ * either). The dashboard page uses this to show one Indonesian message
+ * without repeating the raw response body. */
+export class RunNotFoundError extends Error {}
+
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 async function authHeaders(): Promise<HeadersInit> {
@@ -72,6 +80,24 @@ export async function postRun(input: OperationalInput): Promise<RunResult> {
     headers: await authHeaders(),
     body: JSON.stringify(input),
   });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+/** Fetches one previously committed run: `GET /runs/{id}`. The dashboard
+ * (`app/dashboard/page.tsx`) is this function's only caller -- it reads the
+ * run's stored `forecastSnapshot` for its price charts rather than calling
+ * `GET /forecasts` itself, so the page always shows the prices the run was
+ * actually computed against (see `app/runs.py`'s `get`/`commit` docstrings),
+ * never today's. Throws `RunNotFoundError` on a 404 (missing id, or a
+ * leaked/guessed id belonging to another tenant -- the backend returns the
+ * same 404 for both) so the page can show one fixed Indonesian message
+ * instead of the raw response body. */
+export async function getRun(id: string): Promise<RunResult> {
+  const res = await fetch(`${BASE}/runs/${id}`, {
+    headers: await authHeaders(),
+  });
+  if (res.status === 404) throw new RunNotFoundError(await res.text());
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
