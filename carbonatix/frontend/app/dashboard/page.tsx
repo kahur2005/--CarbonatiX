@@ -6,11 +6,119 @@ import { useSearchParams } from "next/navigation";
 import CompliancePanel from "@/components/dashboard/CompliancePanel";
 import EmissionBars from "@/components/dashboard/EmissionBars";
 import ForecastChart from "@/components/dashboard/ForecastChart";
-import { getRun, RunNotFoundError } from "@/lib/api";
+import NodeGraph, { PENDING_NODE_STATUSES, type NodeStatuses } from "@/components/advisor/NodeGraph";
+import RecommendationPanel, { type AdvisorOutcome } from "@/components/advisor/RecommendationPanel";
+import { getRun, RunNotFoundError, streamRecommendation } from "@/lib/api";
 import { formatIdrPerTon, formatUsdPerTon, STANDING_DISCLOSURES } from "@/lib/dashboard";
-import type { RunResult } from "@/types/emissions";
+import type { RecommendationVerifyPayload, RunResult } from "@/types/emissions";
 
 type LoadState = "loading" | "ready" | "not-found" | "error";
+
+/** Narrows `RecommendationEvent["payload"]` (an untyped bag on the wire) to
+ * `RecommendationVerifyPayload` before it is trusted -- a `verify`/`done`
+ * event with a payload that doesn't actually match the expected shape is
+ * treated the same as one that never arrived (see `AdvisorSection` below),
+ * never cast through blindly. */
+function isVerifyPayload(payload: unknown): payload is RecommendationVerifyPayload {
+  if (!payload || typeof payload !== "object") return false;
+  const p = payload as Record<string, unknown>;
+  return (
+    typeof p.flagged === "boolean" &&
+    typeof p.body === "string" &&
+    typeof p.placeholderCitations === "boolean" &&
+    Array.isArray(p.unsupported) &&
+    Array.isArray(p.citations)
+  );
+}
+
+/** When the stream ends or errors without a terminal event for every
+ * stage, any stage still `"running"` is stuck -- forced to `"failed"` so
+ * nothing spins forever. A stage still `"pending"` legitimately never
+ * started (e.g. `verify` after a failed `synthesise`, or every later stage
+ * when the connection never delivered a single event) and is left as-is,
+ * except that the *first* pending stage is also marked `"failed"` so the
+ * graph shows where the process broke instead of sitting entirely grey
+ * with no signal at all. */
+function forceInterruptedTerminal(statuses: NodeStatuses): NodeStatuses {
+  const order: (keyof NodeStatuses)[] = ["retrieve", "assemble", "synthesise", "verify"];
+  const next = { ...statuses };
+  for (const stage of order) {
+    if (next[stage] === "running" || next[stage] === "pending") {
+      next[stage] = "failed";
+      return next;
+    }
+  }
+  return next;
+}
+
+/**
+ * Consumes `GET /runs/{id}/recommendation`'s SSE stream and renders the
+ * reasoning `NodeGraph` alongside the `RecommendationPanel` it feeds.
+ *
+ * Mounted with `key={runId}` by `RunView` below (same reasoning as
+ * `RunView` itself carrying `key={runId}` in `DashboardContent`): a change
+ * of run remounts this component from scratch instead of needing an effect
+ * to reset five pieces of state for the new id.
+ */
+function AdvisorSection({ runId }: { runId: string }) {
+  const [statuses, setStatuses] = useState<NodeStatuses>(PENDING_NODE_STATUSES);
+  const [verify, setVerify] = useState<RecommendationVerifyPayload | null>(null);
+  const [settled, setSettled] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+
+    (async () => {
+      let sawTerminalOutcome = false;
+      try {
+        for await (const event of streamRecommendation(runId, controller.signal)) {
+          if (cancelled) return;
+          setStatuses((prev) => ({ ...prev, [event.stage]: event.status }));
+          if (event.stage === "verify" && event.status === "done" && isVerifyPayload(event.payload)) {
+            sawTerminalOutcome = true;
+            setVerify(event.payload);
+          }
+          // A failed `synthesise` is itself a terminal outcome for the
+          // pipeline -- `run_pipeline` returns immediately after yielding
+          // it and never sends `verify` (see `app/advisor/pipeline.py`).
+          if (event.stage === "synthesise" && event.status === "failed") {
+            sawTerminalOutcome = true;
+          }
+        }
+      } catch {
+        // A network error mid-stream is communicated below via `settled`
+        // plus the forced node statuses -- never a raw exception string in
+        // this Bahasa Indonesia UI.
+      } finally {
+        if (!cancelled) {
+          if (!sawTerminalOutcome) {
+            setStatuses((prev) => forceInterruptedTerminal(prev));
+          }
+          setSettled(true);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [runId]);
+
+  const outcome: AdvisorOutcome = verify
+    ? { kind: "ready", verify }
+    : settled
+      ? { kind: "unavailable" }
+      : { kind: "pending" };
+
+  return (
+    <div className="flex flex-col gap-4">
+      <NodeGraph statuses={statuses} />
+      <RecommendationPanel outcome={outcome} />
+    </div>
+  );
+}
 
 /**
  * Fetches and renders one committed run, given its id. Mounted with
@@ -114,6 +222,8 @@ function RunView({ runId }: { runId: string }) {
           />
         </div>
       </div>
+
+      <AdvisorSection key={run.id} runId={run.id} />
     </div>
   );
 }

@@ -165,3 +165,50 @@ export interface DocumentExtractionResult {
    * signal while this is `true`. */
   confidenceIsPlaceholder: boolean;
 }
+
+// ---- GET /runs/{id}/recommendation (advisor pipeline SSE) --------------
+//
+// Mirrors `app/advisor/pipeline.py` and `app/recommendation.py`. This
+// endpoint streams Server-Sent Events, one JSON object per `data:` line
+// (see `lib/api.ts`'s `streamRecommendation`), not a single JSON response.
+
+/** The four pipeline stages, always fired in this order --
+ * `Ambil regulasi` -> `Rangkai angka` -> `Sintesis` -> `Verifikasi` in the
+ * UI (see `components/advisor/NodeGraph.tsx`). Spelled exactly as
+ * `run_pipeline` emits them; do not rename to look more idiomatic here. */
+export type RecommendationStage = "retrieve" | "assemble" | "synthesise" | "verify";
+
+export type RecommendationStageStatus = "running" | "done" | "failed";
+
+/** One SSE frame, i.e. one `_event(...)` call in `run_pipeline`.
+ * `placeholderCitations` rides on every single event (not only `verify`'s)
+ * so a consumer never has to special-case which stage it is looking at to
+ * learn that today's regulation citations are unverified placeholder text
+ * -- see `app/advisor/corpus.py`'s `has_placeholder_text`. */
+export interface RecommendationEvent {
+  stage: RecommendationStage;
+  status: RecommendationStageStatus;
+  payload: Record<string, unknown> | null;
+  placeholderCitations: boolean;
+}
+
+/** `verify`'s `done` payload -- the only stage whose payload this app reads
+ * field by field rather than only using its stage/status. */
+export interface RecommendationVerifyPayload {
+  /** True if the model emitted a numeral that was not in the supplied
+   * figure set. When true, `body` must never be rendered as advice -- see
+   * `components/advisor/RecommendationPanel.tsx`. */
+  flagged: boolean;
+  /** The specific fabricated tokens; only meaningful when `flagged`. */
+  unsupported: string[];
+  /** Clause refs (e.g. "Permen ESDM 16/2022 Pasal 18") that appear
+   * verbatim in `body`. Ref strings only -- `run_pipeline`'s `verify`
+   * event never sends clause body text over this endpoint, so there is no
+   * verbatim article text to expand a citation chip into on the frontend;
+   * see `app/advisor/corpus.py`, which still holds only placeholder text
+   * for every clause regardless. */
+  citations: string[];
+  body: string;
+  model: string;
+  placeholderCitations: boolean;
+}

@@ -6,6 +6,7 @@ import type {
   EmissionInput,
   EmissionResult,
   OperationalInput,
+  RecommendationEvent,
   RunResult,
   SuggestCapInput,
   SuggestCapResult,
@@ -110,6 +111,65 @@ export async function postSuggestCap(input: SuggestCapInput): Promise<SuggestCap
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
+}
+
+/**
+ * Streams `GET /runs/{id}/recommendation` -- the four-stage advisor
+ * pipeline (`app/advisor/pipeline.py`) framed as Server-Sent Events.
+ *
+ * Deliberately not `EventSource`: the route is guarded by
+ * `current_user_id` (`app/auth.py`), which accepts only an
+ * `Authorization: Bearer <supabase-jwt>` header with no cookie or
+ * query-string fallback, and `EventSource` has no way to attach a custom
+ * header. `fetch` with a streaming body reader is used instead, carrying
+ * the same `authHeaders()` every other authenticated call in this module
+ * uses, and the `data: ...\n\n` framing `recommendation.format_stream`
+ * writes is parsed by hand below.
+ *
+ * Yields one parsed event per SSE frame. A frame that fails to parse is
+ * skipped rather than thrown: one malformed frame must not take down the
+ * whole stream, since every consumer of this generator already has to
+ * tolerate a stream that ends early or errors mid-flight (see
+ * `components/advisor/NodeGraph.tsx`).
+ */
+export async function* streamRecommendation(
+  runId: string,
+  signal?: AbortSignal,
+): AsyncGenerator<RecommendationEvent> {
+  const res = await fetch(`${BASE}/runs/${runId}/recommendation`, {
+    headers: await authHeaders(),
+    signal,
+  });
+  if (!res.ok || !res.body) {
+    throw new Error(await res.text().catch(() => res.statusText));
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let sepIndex = buffer.indexOf("\n\n");
+      while (sepIndex !== -1) {
+        const frame = buffer.slice(0, sepIndex);
+        buffer = buffer.slice(sepIndex + 2);
+        const dataLine = frame.split("\n").find((line) => line.startsWith("data: "));
+        if (dataLine) {
+          try {
+            yield JSON.parse(dataLine.slice("data: ".length)) as RecommendationEvent;
+          } catch {
+            // Malformed frame -- skip it, do not throw and kill the stream.
+          }
+        }
+        sepIndex = buffer.indexOf("\n\n");
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 /** Posts one document for OCR candidate extraction. Never writes to the
