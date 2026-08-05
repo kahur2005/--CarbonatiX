@@ -1,17 +1,21 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import UploadDropzone from "@/components/twin/UploadDropzone";
 import {
+  formatSiteSpecValue,
   NODE_FIELDS,
   NODE_LABELS,
   OPERATIONAL_FIELD_LABELS,
   POWER_MIX_INCOMPLETE_MESSAGE,
   powerMixSummary,
+  SITE_SPEC_EDIT_LABEL,
   toNumber,
   type NodeId,
   type TwinFormState,
 } from "@/lib/twin";
+import type { Company } from "@/types/emissions";
 
 type Tab = "manual" | "upload";
 
@@ -20,6 +24,11 @@ export interface NodePanelProps {
   form: TwinFormState;
   onFieldChange: <K extends keyof TwinFormState>(key: K, value: string) => void;
   onAcceptCandidate: (field: string, displayValue: number) => void;
+  /** The saved company profile, for this node's read-only site-spec
+   * field(s) (see `lib/twin.ts`'s `SiteSpecFieldDescriptor`). `null` while
+   * still loading or when onboarding hasn't been completed yet -- the
+   * field then shows a placeholder rather than a stale/fabricated number. */
+  company: Company | null;
   /** This node's live emission contribution, tCO2e -- `null` while no
    * result is available (still typing, last recompute failed). */
   badgeValue: number | null;
@@ -54,6 +63,7 @@ export default function NodePanel({
   form,
   onFieldChange,
   onAcceptCandidate,
+  company,
   badgeValue,
   errorMessage,
   onClose,
@@ -125,31 +135,48 @@ export default function NodePanel({
 
       {tab === "manual" && (
         <div className="flex flex-col gap-3">
-          {fields.map((field) => (
-            <div key={field.key} className="flex flex-col gap-1">
-              <label htmlFor={`twin-${field.key}`} className={LABEL_CLASS}>
-                {field.label}
-                {field.unit ? ` (${field.unit})` : ""}
-              </label>
-              <input
-                id={`twin-${field.key}`}
-                type="number"
-                step="any"
-                min={field.range.min}
-                max={field.range.max}
-                value={form[field.key]}
-                onChange={(e) => onFieldChange(field.key, e.target.value)}
-                className={NUMBER_INPUT_CLASS}
-              />
-              {field.siteSpec && (
-                <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                  Nilai bawaan dari spesifikasi situs tersimpan. Mengubahnya di sini hanya
-                  memengaruhi pratinjau emisi -- perhitungan yang disimpan tetap memakai
-                  spesifikasi situs.
+          {fields.map((field) =>
+            field.kind === "operational" ? (
+              <div key={field.key} className="flex flex-col gap-1">
+                <label htmlFor={`twin-${field.key}`} className={LABEL_CLASS}>
+                  {field.label}
+                  {field.unit ? ` (${field.unit})` : ""}
+                </label>
+                <input
+                  id={`twin-${field.key}`}
+                  type="number"
+                  step="any"
+                  min={field.range.min}
+                  max={field.range.max}
+                  value={form[field.key]}
+                  onChange={(e) => onFieldChange(field.key, e.target.value)}
+                  className={NUMBER_INPUT_CLASS}
+                />
+              </div>
+            ) : (
+              // Site-spec field: read-only. See `SiteSpecFieldDescriptor` in
+              // lib/twin.ts for why -- an editable override here changed
+              // the live preview without changing what a committed run
+              // actually used, which is a trap in a carbon-accounting
+              // product, not a convenience.
+              <div key={field.companyKey} className="flex flex-col gap-1">
+                <span className={LABEL_CLASS}>
+                  {field.label}
+                  {field.unit ? ` (${field.unit})` : ""}
+                </span>
+                <p className="rounded border border-black/[.08] bg-black/[.02] px-3 py-2 text-sm text-black dark:border-white/[.145] dark:bg-white/[.04] dark:text-zinc-50">
+                  {company ? formatSiteSpecValue(field, company) : "--"}
                 </p>
-              )}
-            </div>
-          ))}
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                  Nilai dari spesifikasi situs tersimpan -- tidak dapat diubah di sini.{" "}
+                  <Link href="/onboarding" className="underline">
+                    {SITE_SPEC_EDIT_LABEL}
+                  </Link>
+                  .
+                </p>
+              </div>
+            ),
+          )}
 
           {mix && (
             <div

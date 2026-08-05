@@ -3,6 +3,7 @@ import {
   buildEmissionInput,
   buildOperationalInput,
   EMPTY_TWIN_FORM,
+  formatSiteSpecValue,
   NODE_FIELDS,
   NODE_FOR_FIELD,
   NODE_ORDER,
@@ -10,11 +11,13 @@ import {
   parseEmissionError,
   POWER_MIX_INCOMPLETE_MESSAGE,
   powerMixSummary,
+  SITE_SPEC_EDIT_LABEL,
   toNumber,
   validateTwinForm,
+  type SiteSpecFieldDescriptor,
   type TwinFormState,
 } from "./twin";
-import type { EmissionResult } from "@/types/emissions";
+import type { Company, EmissionResult } from "@/types/emissions";
 
 // The exact table from `app/ingestion/mapping.py`'s `NODE_FOR_FIELD`,
 // snake_case, converted 1:1 to the camelCase wire name it serializes to.
@@ -45,63 +48,122 @@ describe("NODE_FOR_FIELD matches app/ingestion/mapping.py exactly", () => {
     }
   });
 
-  it("every NODE_FIELDS descriptor's candidateField converts to the same node in NODE_FOR_FIELD", () => {
-    // snake_case candidateField -> camelCase wire field, the same
-    // conversion `to_camel` performs on the backend (none of these 9 names
-    // contain a digit, so the "letter after a digit" special case the
-    // schemas.py docstring warns about never applies here).
+  it("every NODE_FIELDS descriptor converts to the same node in NODE_FOR_FIELD -- operational fields via candidateField, site-spec fields via companyKey", () => {
+    // snake_case -> camelCase, the same conversion `to_camel` performs on
+    // the backend (none of these 9 names contain a digit, so the "letter
+    // after a digit" special case the schemas.py docstring warns about
+    // never applies here).
     const toCamel = (s: string) => s.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
     for (const node of NODE_ORDER) {
       for (const field of NODE_FIELDS[node]) {
-        const wireField = toCamel(field.candidateField);
+        const wireField = field.kind === "operational" ? toCamel(field.candidateField) : field.companyKey;
         expect(NODE_FOR_FIELD[wireField as keyof typeof NODE_FOR_FIELD]).toBe(node);
       }
     }
   });
+
+  it("exactly three fields are read-only site-spec values, the rest are editable operational levers", () => {
+    const allFields = NODE_ORDER.flatMap((node) => NODE_FIELDS[node]);
+    const siteSpecKeys = allFields
+      .filter((f) => f.kind === "siteSpec")
+      .map((f) => f.companyKey)
+      .sort();
+    expect(siteSpecKeys).toEqual(["dryerThermalEfficiency", "efCaptivePltu", "secEafKwhPerTAlloy"].sort());
+    expect(allFields.filter((f) => f.kind === "operational")).toHaveLength(6);
+  });
 });
 
-const FULL_FORM: TwinFormState = {
+const OPERATIONAL_FORM: TwinFormState = {
   wetOreInputTons: "10000",
   moistureContentPercent: "32",
   nickelGradePercent: "1.8",
-  dryerThermalEfficiencyPercent: "55",
   reductantBiocokePercent: "8",
-  secEafKwhPerTAlloy: "2400",
   powerMixCaptiveCoalPercent: "70",
   powerMixHydroGridPercent: "30",
-  efCaptivePltu: "1.0",
 };
 
-describe("buildEmissionInput", () => {
-  it("converts every percentage field to a fraction, leaves the rest as-is", () => {
-    const result = buildEmissionInput(FULL_FORM);
+const COMPANY_A: Company = {
+  name: "PT Contoh Smelter",
+  technology: "RKEF",
+  efCaptivePltu: 1.0,
+  dryerThermalEfficiency: 0.55,
+  secEafKwhPerTAlloy: 2400,
+  alloyNickelGrade: 0.21,
+  kilnThermalEfficiency: 0.65,
+  capTco2e: 120000,
+};
+
+// A second, distinctly-valued company -- used to prove `buildEmissionInput`
+// tracks whichever `Company` it's given rather than some hidden default,
+// and that the three site-spec numbers in its output come from nowhere
+// else.
+const COMPANY_B: Company = {
+  ...COMPANY_A,
+  efCaptivePltu: 0.42,
+  dryerThermalEfficiency: 0.61,
+  secEafKwhPerTAlloy: 3100,
+};
+
+describe("buildEmissionInput sources site-spec fields only from Company -- never from form state", () => {
+  it("the six operational fields come from form, converted to fractions where applicable", () => {
+    const result = buildEmissionInput(OPERATIONAL_FORM, COMPANY_A);
     expect(result.wetOreInputTons).toBe(10000);
     expect(result.moistureContentPct).toBeCloseTo(0.32, 10);
     expect(result.nickelGradePct).toBeCloseTo(0.018, 10);
     expect(result.reductantBiocokePct).toBeCloseTo(0.08, 10);
     expect(result.powerMixCaptiveCoal).toBeCloseTo(0.7, 10);
     expect(result.powerMixHydroGrid).toBeCloseTo(0.3, 10);
-    expect(result.secEafKwhPerTAlloy).toBe(2400);
-    expect(result.efCaptivePltu).toBe(1.0);
-    expect(result.dryerThermalEfficiency).toBeCloseTo(0.55, 10);
   });
 
-  it("throws RangeError (never returns) on an out-of-range percentage", () => {
+  it("the three site-spec fields come from Company verbatim, unconverted", () => {
+    const result = buildEmissionInput(OPERATIONAL_FORM, COMPANY_A);
+    expect(result.secEafKwhPerTAlloy).toBe(COMPANY_A.secEafKwhPerTAlloy);
+    expect(result.efCaptivePltu).toBe(COMPANY_A.efCaptivePltu);
+    expect(result.dryerThermalEfficiency).toBe(COMPANY_A.dryerThermalEfficiency);
+  });
+
+  it("swapping the Company changes the three site-spec fields with the operational form held identical -- proving there is no other source for them", () => {
+    const resultA = buildEmissionInput(OPERATIONAL_FORM, COMPANY_A);
+    const resultB = buildEmissionInput(OPERATIONAL_FORM, COMPANY_B);
+    expect(resultB.secEafKwhPerTAlloy).toBe(COMPANY_B.secEafKwhPerTAlloy);
+    expect(resultB.efCaptivePltu).toBe(COMPANY_B.efCaptivePltu);
+    expect(resultB.dryerThermalEfficiency).toBe(COMPANY_B.dryerThermalEfficiency);
+    expect(resultB.secEafKwhPerTAlloy).not.toBe(resultA.secEafKwhPerTAlloy);
+    expect(resultB.efCaptivePltu).not.toBe(resultA.efCaptivePltu);
+    expect(resultB.dryerThermalEfficiency).not.toBe(resultA.dryerThermalEfficiency);
+    // The six operational fields are untouched by the company swap.
+    expect(resultB.wetOreInputTons).toBe(resultA.wetOreInputTons);
+    expect(resultB.moistureContentPct).toBe(resultA.moistureContentPct);
+  });
+
+  it("TwinFormState has no key for any of the three site-spec fields -- a user-entered override cannot reach this payload because there is nowhere in the editable form to enter one", () => {
+    // Type-level guarantee, asserted at runtime too: none of the three
+    // wire field names this function reads from `company` exist as
+    // TwinFormState keys.
+    const formKeys = Object.keys(EMPTY_TWIN_FORM);
+    expect(formKeys).not.toContain("dryerThermalEfficiency");
+    expect(formKeys).not.toContain("dryerThermalEfficiencyPercent");
+    expect(formKeys).not.toContain("secEafKwhPerTAlloy");
+    expect(formKeys).not.toContain("efCaptivePltu");
+    expect(formKeys).toHaveLength(6);
+  });
+
+  it("throws RangeError (never returns) on an out-of-range operational percentage", () => {
     expect(() =>
-      buildEmissionInput({ ...FULL_FORM, moistureContentPercent: "150" }),
+      buildEmissionInput({ ...OPERATIONAL_FORM, moistureContentPercent: "150" }, COMPANY_A),
     ).toThrow(RangeError);
   });
 
-  it("throws RangeError on an empty (NaN) percentage field", () => {
-    expect(() => buildEmissionInput({ ...FULL_FORM, nickelGradePercent: "" })).toThrow(
-      RangeError,
-    );
+  it("throws RangeError on an empty (NaN) operational percentage field", () => {
+    expect(() =>
+      buildEmissionInput({ ...OPERATIONAL_FORM, nickelGradePercent: "" }, COMPANY_A),
+    ).toThrow(RangeError);
   });
 });
 
 describe("buildOperationalInput", () => {
-  it("carries only the six daily levers -- no site-spec field", () => {
-    const result = buildOperationalInput(FULL_FORM);
+  it("carries only the six daily levers -- structurally cannot carry a site-spec field", () => {
+    const result = buildOperationalInput(OPERATIONAL_FORM);
     expect(result.wetOreInputTons).toBe(10000);
     expect(result.moistureContentPct).toBeCloseTo(0.32, 10);
     expect(result.nickelGradePct).toBeCloseTo(0.018, 10);
@@ -111,6 +173,37 @@ describe("buildOperationalInput", () => {
     expect(result).not.toHaveProperty("dryerThermalEfficiency");
     expect(result).not.toHaveProperty("secEafKwhPerTAlloy");
     expect(result).not.toHaveProperty("efCaptivePltu");
+  });
+});
+
+describe("formatSiteSpecValue", () => {
+  const dryerField: SiteSpecFieldDescriptor = {
+    kind: "siteSpec",
+    companyKey: "dryerThermalEfficiency",
+    label: "Efisiensi termal dryer",
+    unit: "%",
+    isPercent: true,
+  };
+  const eafField: SiteSpecFieldDescriptor = {
+    kind: "siteSpec",
+    companyKey: "secEafKwhPerTAlloy",
+    label: "Energi spesifik EAF",
+    unit: "kWh/ton alloy",
+    isPercent: false,
+  };
+
+  it("converts a fraction to a percentage and glues the % sign", () => {
+    expect(formatSiteSpecValue(dryerField, COMPANY_A)).toBe("55%");
+  });
+
+  it("leaves a non-percent field's number as-is with a space-separated unit", () => {
+    expect(formatSiteSpecValue(eafField, COMPANY_A)).toBe("2.400 kWh/ton alloy");
+  });
+});
+
+describe("SITE_SPEC_EDIT_LABEL", () => {
+  it("is the fixed Indonesian link text pointing back to onboarding", () => {
+    expect(SITE_SPEC_EDIT_LABEL).toBe("Ubah di profil perusahaan");
   });
 });
 
@@ -126,11 +219,11 @@ describe("toNumber", () => {
 
 describe("validateTwinForm", () => {
   it("is null for a fully valid form", () => {
-    expect(validateTwinForm(FULL_FORM)).toBeNull();
+    expect(validateTwinForm(OPERATIONAL_FORM)).toBeNull();
   });
 
   it("names the first invalid field in node order", () => {
-    const result = validateTwinForm({ ...FULL_FORM, wetOreInputTons: "-1" });
+    const result = validateTwinForm({ ...OPERATIONAL_FORM, wetOreInputTons: "-1" });
     expect(result).toMatch(/Bijih basah masuk/);
   });
 
@@ -201,7 +294,17 @@ describe("nodeEmissionContribution", () => {
     expect(nodeEmissionContribution("eaf", SAMPLE_RESULT)).toBe(40);
   });
 
-  it("attributes pltu the same Scope 2 figure as eaf -- not a double count of totalEmissions", () => {
+  // NOTE (per review): this only checks that a hand-built fixture is
+  // internally consistent with itself -- SAMPLE_RESULT's four distinct
+  // components happen to sum to its own totalEmissions because both were
+  // typed in by hand to agree. It cannot catch a real double-count
+  // regression (e.g. if `nodeEmissionContribution` were changed to add
+  // `eafEmissions` into `totalEmissions` a second time somewhere), because
+  // nothing here computes `totalEmissions` independently from the
+  // components the way `calculate_emissions` does on the backend. Treat
+  // this as documentation of the current attribution choice, not a safety
+  // net against that class of bug.
+  it("attributes pltu the same Scope 2 figure as eaf (documentation, not a regression safety net -- see note above)", () => {
     expect(nodeEmissionContribution("pltu", SAMPLE_RESULT)).toBe(40);
     const sumOfDistinctComponents =
       SAMPLE_RESULT.dryerEmissions + SAMPLE_RESULT.kilnHeatEmissions +

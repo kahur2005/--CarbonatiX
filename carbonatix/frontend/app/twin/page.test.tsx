@@ -81,13 +81,14 @@ const VALID_RESULT: EmissionResult = {
   eafMwh: 4,
 };
 
-/** Fills every field except the two power-mix shares: stockpile, kiln, and
- * (implicitly, via the mocked company) dryer/EAF/PLTU's site-spec values.
- * Opens the EAF panel last and waits for its input to show the
- * company-seeded value, which only happens once `getCompany()` has
- * resolved -- the test's signal that the page's company fetch (and the
- * `companyState === "ready"` gate) has settled, without adding a
- * test-only hook to the page itself. */
+/** Fills every editable field except the two power-mix shares: stockpile
+ * and kiln. Dryer/EAF/PLTU's site-spec values are read-only (see
+ * `lib/twin.ts`'s `SiteSpecFieldDescriptor`) and need no filling -- this
+ * opens the EAF panel last and waits for its read-only value to show the
+ * company-seeded figure ("2.400 kWh/ton alloy"), which only renders once
+ * `getCompany()` has resolved. That's the test's signal that the page's
+ * company fetch (and the `companyState === "ready"` gate) has settled,
+ * without adding a test-only hook to the page itself. */
 async function fillValidFormExceptPowerMix(user: ReturnType<typeof userEvent.setup>) {
   // `Scene` is loaded via `next/dynamic` (`ssr: false`), so even with the
   // module mocked above, it resolves asynchronously on the first render --
@@ -101,7 +102,10 @@ async function fillValidFormExceptPowerMix(user: ReturnType<typeof userEvent.set
   await user.type(screen.getByLabelText(/Reduktan biocoke/), "8");
 
   await user.click(screen.getByTestId("select-eaf"));
-  await waitFor(() => expect(screen.getByLabelText(/Energi spesifik EAF/)).toHaveValue(2400));
+  await waitFor(() => expect(screen.getByText("2.400 kWh/ton alloy")).toBeInTheDocument());
+  // Read-only: no input, no label association -- just the static value and
+  // the link to onboarding.
+  expect(screen.queryByLabelText(/Energi spesifik EAF/)).not.toBeInTheDocument();
 }
 
 describe("TwinPage", () => {
@@ -132,6 +136,47 @@ describe("TwinPage", () => {
 
     await waitFor(() => expect(commitButton).not.toBeDisabled());
     expect(screen.queryByText(POWER_MIX_INCOMPLETE_MESSAGE)).not.toBeInTheDocument();
+  });
+
+  it("sends the company's site-spec values verbatim to /emissions, with no editable field that could override them", async () => {
+    const user = userEvent.setup();
+    render(<TwinPage />);
+
+    await fillValidFormExceptPowerMix(user);
+    await user.click(screen.getByTestId("select-pltu"));
+    await user.type(screen.getByLabelText(/captive coal/), "70");
+    await user.type(screen.getByLabelText(/hidro\/grid/), "30");
+
+    await waitFor(() => expect(postEmissions).toHaveBeenCalled());
+
+    // Every /emissions call this test produces carries exactly
+    // the company's three site-spec numbers -- this is the payload
+    // `runs.commit` (app/runs.py) also builds from, by reading the same
+    // stored row, so the preview a user approves and what gets persisted
+    // are provably the same three numbers, not just documented as such.
+    const lastCall = vi.mocked(postEmissions).mock.calls.at(-1)?.[0];
+    expect(lastCall).toBeDefined();
+    expect(lastCall?.secEafKwhPerTAlloy).toBe(VALID_COMPANY.secEafKwhPerTAlloy);
+    expect(lastCall?.efCaptivePltu).toBe(VALID_COMPANY.efCaptivePltu);
+    expect(lastCall?.dryerThermalEfficiency).toBe(VALID_COMPANY.dryerThermalEfficiency);
+
+    // There is no input anywhere on the page for any of the three
+    // site-spec fields -- confirmed across every node, not just the one
+    // currently open, by visiting each in turn.
+    for (const node of ["dryer", "eaf", "pltu"]) {
+      await user.click(screen.getByTestId(`select-${node}`));
+      expect(screen.queryByLabelText(/Efisiensi termal dryer/)).not.toBeInTheDocument();
+      expect(screen.queryByLabelText(/Energi spesifik EAF/)).not.toBeInTheDocument();
+      expect(screen.queryByLabelText(/Faktor emisi PLTU captive/)).not.toBeInTheDocument();
+    }
+
+    // The link back to onboarding is present instead, on each of the three
+    // nodes that carry a site-spec value.
+    await user.click(screen.getByTestId("select-dryer"));
+    expect(screen.getByRole("link", { name: "Ubah di profil perusahaan" })).toHaveAttribute(
+      "href",
+      "/onboarding",
+    );
   });
 
   it("on a 422, marks only the owning node -- never a bare global banner", async () => {

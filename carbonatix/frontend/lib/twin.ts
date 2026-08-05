@@ -18,14 +18,13 @@
  * 100 directly.
  */
 
-import { toFraction } from "./units";
+import { toFraction, toPercent } from "./units";
 import {
   CAP_HELPER_RANGES,
-  SITE_SPEC_RANGES,
   validateFields,
   type FieldRange,
 } from "./onboarding";
-import type { EmissionInput, EmissionResult, OperationalInput } from "@/types/emissions";
+import type { Company, EmissionInput, EmissionResult, OperationalInput } from "@/types/emissions";
 
 export const NODE_ORDER = ["stockpile", "dryer", "kiln", "eaf", "pltu"] as const;
 export type NodeId = (typeof NODE_ORDER)[number];
@@ -59,51 +58,86 @@ export const NODE_FOR_FIELD: Record<keyof EmissionInput, NodeId> = {
 /** Twin form state, held as the raw string each input shows -- same
  * convention as `SiteSpecFormValues`/`HelperState` in the onboarding page,
  * so an in-progress or empty entry is never a stray `NaN`. Percentage
- * fields are held as percentages (0-100), matching what's rendered. */
+ * fields are held as percentages (0-100), matching what's rendered.
+ *
+ * Holds only the six daily operational levers. The three site-spec values
+ * (`dryerThermalEfficiency`, `secEafKwhPerTAlloy`, `efCaptivePltu`) are
+ * deliberately **not** here -- see `SiteSpecFieldDescriptor` below for why
+ * they are read-only, sourced straight from the fetched `Company`, never
+ * from editable form state. */
 export interface TwinFormState {
   wetOreInputTons: string;
   moistureContentPercent: string;
   nickelGradePercent: string;
-  dryerThermalEfficiencyPercent: string;
   reductantBiocokePercent: string;
-  secEafKwhPerTAlloy: string;
   powerMixCaptiveCoalPercent: string;
   powerMixHydroGridPercent: string;
-  efCaptivePltu: string;
 }
 
 export const EMPTY_TWIN_FORM: TwinFormState = {
   wetOreInputTons: "",
   moistureContentPercent: "",
   nickelGradePercent: "",
-  dryerThermalEfficiencyPercent: "",
   reductantBiocokePercent: "",
-  secEafKwhPerTAlloy: "",
   powerMixCaptiveCoalPercent: "",
   powerMixHydroGridPercent: "",
-  efCaptivePltu: "",
 };
 
-/** One field's display metadata plus everything needed to wire it into the
- * node panel: which `TwinFormState` key it edits, which OCR candidate field
- * it corresponds to (snake_case, matches `Candidate.field`), its valid
- * range (reusing `CAP_HELPER_RANGES`/`SITE_SPEC_RANGES` from
- * `lib/onboarding.ts` rather than re-declaring backend bounds a second
- * time), and whether it's a site-spec value seeded from the saved company
- * profile (dryer/EAF/PLTU's non-power-mix field) as opposed to a daily
- * operational lever. */
-export interface TwinFieldDescriptor {
-  key: keyof TwinFormState;
-  candidateField: string;
+interface FieldDisplayMeta {
   label: string;
   unit?: string;
   isPercent: boolean;
-  range: FieldRange;
-  siteSpec?: boolean;
 }
+
+/** A daily operational lever: editable, backed by a `TwinFormState` key,
+ * OCR-able (`candidateField` matches `Candidate.field` / the backend's
+ * `FIELDS_BY_PROFILE["operational"]`), and range-checked client-side
+ * (reusing `CAP_HELPER_RANGES` from `lib/onboarding.ts` rather than
+ * re-declaring backend bounds a second time). */
+export interface OperationalFieldDescriptor extends FieldDisplayMeta {
+  kind: "operational";
+  key: keyof TwinFormState;
+  candidateField: string;
+  range: FieldRange;
+}
+
+/**
+ * A site-spec value: `dryerThermalEfficiency`, `secEafKwhPerTAlloy` or
+ * `efCaptivePltu`. Deliberately **read-only** on its node -- not merely
+ * pre-filled-but-overridable.
+ *
+ * An earlier version of this panel let these three be edited, seeding them
+ * from the company profile but allowing override. That was a trap: the
+ * live `/emissions` preview used whatever the form held (including an
+ * override), but `POST /runs` never sends these three fields at all --
+ * `runs.commit` (`app/runs.py`) always reads them from the caller's stored
+ * `companies` row. A user could watch `totalEmissions` change in response
+ * to an override, approve that number, commit, and have a *different*
+ * figure persisted -- the approved preview and the stored run silently
+ * diverging. In a carbon-accounting product that is not a UI wrinkle.
+ *
+ * The fix is to remove the affordance rather than guard it (e.g. by
+ * comparing the override against the company baseline and blocking commit
+ * on drift): read-only means the preview is *always* exactly what gets
+ * committed, by construction, with no comparison logic that could later
+ * get out of sync itself. The value is still shown, with its unit, because
+ * knowing what's currently driving a node's emissions is genuinely useful
+ * -- it's just not editable here. Changing it means going to
+ * `/onboarding` (`SITE_SPEC_EDIT_LABEL` below is the link text used for
+ * that in `NodePanel`).
+ */
+export interface SiteSpecFieldDescriptor extends FieldDisplayMeta {
+  kind: "siteSpec";
+  companyKey: "dryerThermalEfficiency" | "secEafKwhPerTAlloy" | "efCaptivePltu";
+}
+
+export type TwinFieldDescriptor = OperationalFieldDescriptor | SiteSpecFieldDescriptor;
+
+export const SITE_SPEC_EDIT_LABEL = "Ubah di profil perusahaan";
 
 const STOCKPILE_FIELDS: TwinFieldDescriptor[] = [
   {
+    kind: "operational",
     key: "wetOreInputTons",
     candidateField: "wet_ore_input_tons",
     label: "Bijih basah masuk",
@@ -112,6 +146,7 @@ const STOCKPILE_FIELDS: TwinFieldDescriptor[] = [
     range: CAP_HELPER_RANGES.wetOreInputTons,
   },
   {
+    kind: "operational",
     key: "moistureContentPercent",
     candidateField: "moisture_content_pct",
     label: "Kadar air",
@@ -120,6 +155,7 @@ const STOCKPILE_FIELDS: TwinFieldDescriptor[] = [
     range: CAP_HELPER_RANGES.moistureContentPercent,
   },
   {
+    kind: "operational",
     key: "nickelGradePercent",
     candidateField: "nickel_grade_pct",
     label: "Kadar nikel bijih",
@@ -131,18 +167,17 @@ const STOCKPILE_FIELDS: TwinFieldDescriptor[] = [
 
 const DRYER_FIELDS: TwinFieldDescriptor[] = [
   {
-    key: "dryerThermalEfficiencyPercent",
-    candidateField: "dryer_thermal_efficiency",
+    kind: "siteSpec",
+    companyKey: "dryerThermalEfficiency",
     label: "Efisiensi termal dryer",
     unit: "%",
     isPercent: true,
-    range: SITE_SPEC_RANGES.dryerThermalEfficiencyPercent,
-    siteSpec: true,
   },
 ];
 
 const KILN_FIELDS: TwinFieldDescriptor[] = [
   {
+    kind: "operational",
     key: "reductantBiocokePercent",
     candidateField: "reductant_biocoke_pct",
     label: "Reduktan biocoke",
@@ -154,18 +189,17 @@ const KILN_FIELDS: TwinFieldDescriptor[] = [
 
 const EAF_FIELDS: TwinFieldDescriptor[] = [
   {
-    key: "secEafKwhPerTAlloy",
-    candidateField: "sec_eaf_kwh_per_t_alloy",
+    kind: "siteSpec",
+    companyKey: "secEafKwhPerTAlloy",
     label: "Energi spesifik EAF",
     unit: "kWh/ton alloy",
     isPercent: false,
-    range: SITE_SPEC_RANGES.secEafKwhPerTAlloy,
-    siteSpec: true,
   },
 ];
 
 const PLTU_FIELDS: TwinFieldDescriptor[] = [
   {
+    kind: "operational",
     key: "powerMixCaptiveCoalPercent",
     candidateField: "power_mix_captive_coal",
     label: "Bauran daya - captive coal",
@@ -174,6 +208,7 @@ const PLTU_FIELDS: TwinFieldDescriptor[] = [
     range: CAP_HELPER_RANGES.powerMixCaptiveCoalPercent,
   },
   {
+    kind: "operational",
     key: "powerMixHydroGridPercent",
     candidateField: "power_mix_hydro_grid",
     label: "Bauran daya - hidro/grid",
@@ -182,18 +217,18 @@ const PLTU_FIELDS: TwinFieldDescriptor[] = [
     range: CAP_HELPER_RANGES.powerMixHydroGridPercent,
   },
   {
-    key: "efCaptivePltu",
-    candidateField: "ef_captive_pltu",
+    kind: "siteSpec",
+    companyKey: "efCaptivePltu",
     label: "Faktor emisi PLTU captive",
     unit: "tCO2e/MWh",
     isPercent: false,
-    range: SITE_SPEC_RANGES.efCaptivePltu,
-    siteSpec: true,
   },
 ];
 
 /** The field table from the task brief, expressed as data: every one of
- * the 9 inputs, grouped under the one node it belongs to. */
+ * the 9 inputs, grouped under the one node it belongs to. Six are
+ * editable operational levers; three (dryer/EAF/PLTU's non-power-mix
+ * field) are read-only site-spec values -- see `SiteSpecFieldDescriptor`. */
 export const NODE_FIELDS: Record<NodeId, TwinFieldDescriptor[]> = {
   stockpile: STOCKPILE_FIELDS,
   dryer: DRYER_FIELDS,
@@ -204,31 +239,38 @@ export const NODE_FIELDS: Record<NodeId, TwinFieldDescriptor[]> = {
 
 const ALL_FIELDS: TwinFieldDescriptor[] = NODE_ORDER.flatMap((node) => NODE_FIELDS[node]);
 
-/** Candidate.field (snake_case, the OCR wire value) -> this form's field
- * key. Only the six `FIELDS_BY_PROFILE["operational"]` fields
- * (`app/ingestion/mapping.py`) are ever actually returned by a
- * `profile=operational` upload; the three site-spec entries are included
- * for completeness/robustness but are never exercised by the twin's own
- * upload tabs -- they come from the onboarding page's `site_spec` upload
- * instead. */
-export const CANDIDATE_FIELD_TO_FORM_KEY: Record<string, keyof TwinFormState> = Object.fromEntries(
-  ALL_FIELDS.map((f) => [f.candidateField, f.key]),
+const OPERATIONAL_FIELDS: OperationalFieldDescriptor[] = ALL_FIELDS.filter(
+  (f): f is OperationalFieldDescriptor => f.kind === "operational",
 );
 
-/** Every field's display metadata, keyed by OCR candidate field -- passed
- * to each node panel's `UploadDropzone` so a candidate is labelled
- * correctly no matter which node's upload tab it surfaces under (the
- * backend's `profile=operational` extraction is not itself node-scoped:
- * uploading from the kiln panel can still return stockpile candidates). */
+/** Candidate.field (snake_case, the OCR wire value) -> this form's field
+ * key. Built only from the six operational descriptors: the three
+ * site-spec fields are read-only and have no `TwinFormState` key to land
+ * in even if a document somehow reported one (it never does -- they're
+ * outside `FIELDS_BY_PROFILE["operational"]` in `app/ingestion/mapping.py`,
+ * only reachable via the onboarding page's `site_spec` upload). */
+export const CANDIDATE_FIELD_TO_FORM_KEY: Record<string, keyof TwinFormState> = Object.fromEntries(
+  OPERATIONAL_FIELDS.map((f) => [f.candidateField, f.key]),
+);
+
+/** The six operational fields' display metadata, keyed by OCR candidate
+ * field -- passed to each node panel's `UploadDropzone` so a candidate is
+ * labelled correctly no matter which node's upload tab it surfaces under
+ * (the backend's `profile=operational` extraction is not itself
+ * node-scoped: uploading from the kiln panel can still return stockpile
+ * candidates). */
 export const OPERATIONAL_FIELD_LABELS: Record<
   string,
   { label: string; unit: string; isPercent: boolean }
 > = Object.fromEntries(
-  ALL_FIELDS.map((f) => [f.candidateField, { label: f.label, unit: f.unit ?? "", isPercent: f.isPercent }]),
+  OPERATIONAL_FIELDS.map((f) => [
+    f.candidateField,
+    { label: f.label, unit: f.unit ?? "", isPercent: f.isPercent },
+  ]),
 );
 
 const TWIN_RANGES: Record<keyof TwinFormState, FieldRange> = Object.fromEntries(
-  ALL_FIELDS.map((f) => [f.key, f.range]),
+  OPERATIONAL_FIELDS.map((f) => [f.key, f.range]),
 ) as Record<keyof TwinFormState, FieldRange>;
 
 /** Empty string in, `NaN` out -- same convention `app/onboarding/page.tsx`
@@ -237,24 +279,46 @@ export function toNumber(value: string): number {
   return value.trim() === "" ? NaN : Number(value);
 }
 
-/** Validates every field in node order (stockpile, dryer, kiln, eaf, pltu),
- * reusing `validateFields`/`CAP_HELPER_RANGES`/`SITE_SPEC_RANGES` from
- * `lib/onboarding.ts` rather than a second bounds table. Returns the first
- * Indonesian error message, or `null` if every field is in range. */
+/** Validates the six operational fields in node order (stockpile, kiln,
+ * pltu), reusing `validateFields`/`CAP_HELPER_RANGES` from
+ * `lib/onboarding.ts` rather than a second bounds table. The three
+ * site-spec fields are not part of this check -- they're read-only,
+ * sourced from a `Company` the backend already validated when it was
+ * saved (`PUT /company`). Returns the first Indonesian error message, or
+ * `null` if every field is in range. */
 export function validateTwinForm(form: TwinFormState): string | null {
   return validateFields(
-    ALL_FIELDS.map((f) => [toNumber(form[f.key]), TWIN_RANGES[f.key]] as [number, FieldRange]),
+    OPERATIONAL_FIELDS.map((f) => [toNumber(form[f.key]), TWIN_RANGES[f.key]] as [number, FieldRange]),
   );
 }
 
-/** Builds the `POST /emissions` payload from the twin's raw form state.
- * Throws `RangeError` (via `toFraction`) if a percentage field is out of
- * [0, 100] or non-finite -- callers must catch this themselves and must
- * never render `err.message` verbatim (see `lib/units.ts`'s docstring and
- * `app/onboarding/page.tsx`'s `describeError` for why: it's an English
- * sentence). Callers should run `validateTwinForm` first so this throw path
- * is reached only for a value the range table didn't anticipate. */
-export function buildEmissionInput(form: TwinFormState): EmissionInput {
+/** Formats a read-only site-spec field's current value for display on its
+ * node -- e.g. "55%" or "2400 kWh/ton alloy" -- straight from the fetched
+ * `Company`, never from form state (there is none for these three
+ * fields). "%" glues to the number; every other unit reads as a separate
+ * word, matching `lib/onboarding.ts`'s `validateRange` convention. */
+export function formatSiteSpecValue(field: SiteSpecFieldDescriptor, company: Company): string {
+  const raw = company[field.companyKey];
+  const displayNumber = field.isPercent ? toPercent(raw) : raw;
+  const formatted = displayNumber.toLocaleString("id-ID", { maximumFractionDigits: 2 });
+  const unitSuffix = !field.unit ? "" : field.unit === "%" ? field.unit : ` ${field.unit}`;
+  return `${formatted}${unitSuffix}`;
+}
+
+/** Builds the `POST /emissions` payload. The six operational levers come
+ * from the twin's editable form state (throws `RangeError` via
+ * `toFraction` if a percentage field is out of [0, 100] or non-finite --
+ * callers must catch this themselves and must never render `err.message`
+ * verbatim, see `lib/units.ts`'s docstring and `app/onboarding/page.tsx`'s
+ * `describeError`; callers should run `validateTwinForm` first so this
+ * throw path is reached only for a value the range table didn't
+ * anticipate). The three site-spec fields come **only** from `company` --
+ * never from form state, because there is none for them -- which is what
+ * makes this payload and `POST /runs`'s persisted calculation
+ * (`runs.commit` reads the same three fields from the same stored company
+ * row) provably identical rather than something that has to be kept in
+ * sync by hand. */
+export function buildEmissionInput(form: TwinFormState, company: Company): EmissionInput {
   return {
     wetOreInputTons: toNumber(form.wetOreInputTons),
     moistureContentPct: toFraction(toNumber(form.moistureContentPercent)),
@@ -262,19 +326,18 @@ export function buildEmissionInput(form: TwinFormState): EmissionInput {
     reductantBiocokePct: toFraction(toNumber(form.reductantBiocokePercent)),
     powerMixCaptiveCoal: toFraction(toNumber(form.powerMixCaptiveCoalPercent)),
     powerMixHydroGrid: toFraction(toNumber(form.powerMixHydroGridPercent)),
-    secEafKwhPerTAlloy: toNumber(form.secEafKwhPerTAlloy),
-    efCaptivePltu: toNumber(form.efCaptivePltu),
-    dryerThermalEfficiency: toFraction(toNumber(form.dryerThermalEfficiencyPercent)),
+    secEafKwhPerTAlloy: company.secEafKwhPerTAlloy,
+    efCaptivePltu: company.efCaptivePltu,
+    dryerThermalEfficiency: company.dryerThermalEfficiency,
   };
 }
 
 /** Builds the `POST /runs` payload -- the six daily operational levers
- * only. The three site-spec fields shown (and overridable) on the dryer,
- * EAF and PLTU nodes are deliberately never part of this payload: the
- * backend's `runs.commit` reads them from the caller's stored company
- * profile, not from the request body (see `OperationalRequest` in
- * `schemas.py`), so an override in the twin changes only the live
- * `/emissions` preview, never what a committed run actually used. */
+ * only. The three site-spec fields shown on the dryer, EAF and PLTU nodes
+ * are never part of this payload, and (now that they're read-only) could
+ * not be even if this function wanted them to be: the backend's
+ * `runs.commit` reads them from the caller's stored company profile, not
+ * from the request body (see `OperationalRequest` in `schemas.py`). */
 export function buildOperationalInput(form: TwinFormState): OperationalInput {
   return {
     wetOreInputTons: toNumber(form.wetOreInputTons),

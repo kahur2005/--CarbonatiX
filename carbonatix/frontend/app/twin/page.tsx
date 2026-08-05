@@ -22,8 +22,7 @@ import {
   type NodeId,
   type TwinFormState,
 } from "@/lib/twin";
-import { toPercent } from "@/lib/units";
-import type { EmissionResult } from "@/types/emissions";
+import type { Company, EmissionResult } from "@/types/emissions";
 
 // R3F's Canvas needs a WebGL context, which only exists in the browser --
 // `ssr: false` keeps it out of the server-rendered HTML entirely rather
@@ -52,6 +51,7 @@ export default function TwinPage() {
   const [form, setForm] = useState<TwinFormState>(EMPTY_TWIN_FORM);
   const [selectedNode, setSelectedNode] = useState<NodeId | null>(null);
   const [companyState, setCompanyState] = useState<CompanyState>("loading");
+  const [company, setCompany] = useState<Company | null>(null);
   const [emissionResult, setEmissionResult] = useState<EmissionResult | null>(null);
   const [computing, setComputing] = useState(false);
   const [generalError, setGeneralError] = useState<string | null>(null);
@@ -69,25 +69,26 @@ export default function TwinPage() {
     setField(formKey, String(displayValue));
   }
 
-  // Seed the dryer/EAF/PLTU nodes' site-spec fields from the saved company
-  // profile -- the daily levers stay blank until the operator enters them.
+  // Fetch the saved company profile once: its three site-spec values
+  // (dryerThermalEfficiency, secEafKwhPerTAlloy, efCaptivePltu) are shown
+  // read-only on their nodes and used directly -- never copied into
+  // editable form state -- by both `recompute` and `handleCommit` below,
+  // so the preview and the committed run are provably built from the same
+  // three numbers. The daily operational levers stay blank until the
+  // operator enters them.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const company = await getCompany();
+        const result = await getCompany();
         if (cancelled) return;
-        setForm((prev) => ({
-          ...prev,
-          dryerThermalEfficiencyPercent: String(toPercent(company.dryerThermalEfficiency)),
-          secEafKwhPerTAlloy: String(company.secEafKwhPerTAlloy),
-          efCaptivePltu: String(company.efCaptivePltu),
-        }));
+        setCompany(result);
         setCompanyState("ready");
       } catch {
         // No profile yet (404) or a fetch failure -- either way the twin
-        // stays usable with blank site-spec fields, but committing is
-        // gated below until onboarding is complete.
+        // stays usable for the six operational levers, but the site-spec
+        // fields have nothing to display and committing is gated below
+        // until onboarding is complete.
         if (!cancelled) setCompanyState("missing");
       }
     })();
@@ -96,7 +97,13 @@ export default function TwinPage() {
     };
   }, []);
 
-  async function recompute(currentForm: TwinFormState) {
+  async function recompute(currentForm: TwinFormState, currentCompany: Company | null) {
+    if (!currentCompany) {
+      // Nothing to build the three site-spec fields from yet (still
+      // loading, or onboarding was never completed) -- wait rather than
+      // send a request that's missing required fields.
+      return;
+    }
     if (validateTwinForm(currentForm) !== null) {
       // Still mid-edit (a blank or out-of-range field) -- wait rather than
       // send a request guaranteed to 422.
@@ -115,7 +122,7 @@ export default function TwinPage() {
 
     let payload;
     try {
-      payload = buildEmissionInput(currentForm);
+      payload = buildEmissionInput(currentForm, currentCompany);
     } catch {
       // toFraction guard tripped on something the range table above didn't
       // catch -- never surface the raw RangeError text, just wait.
@@ -146,10 +153,10 @@ export default function TwinPage() {
   // intended, not a rate limit to work around.
   useEffect(() => {
     const timer = setTimeout(() => {
-      void recompute(form);
+      void recompute(form, company);
     }, DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [form]);
+  }, [form, company]);
 
   const captivePercent = toNumber(form.powerMixCaptiveCoalPercent);
   const hydroPercent = toNumber(form.powerMixHydroGridPercent);
@@ -238,6 +245,7 @@ export default function TwinPage() {
               form={form}
               onFieldChange={setField}
               onAcceptCandidate={handleAcceptCandidate}
+              company={company}
               badgeValue={nodeEmissionContribution(selectedNode, emissionResult)}
               errorMessage={nodeErrors[selectedNode]}
               onClose={() => setSelectedNode(null)}
