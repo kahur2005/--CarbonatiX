@@ -218,7 +218,11 @@ def readings_to_candidates(readings: dict, doc) -> list[Candidate]:
                 source_hint=reading.note,
                 basis=reading.basis if value is not None else None,
                 evidence=reading.evidence,
-                derivation=_derivation_text(reading) if value is not None else "",
+                derivation=(
+                    _derivation_text(reading)
+                    if value is not None and reading.basis == "derived"
+                    else ""
+                ),
             )
         )
     return out

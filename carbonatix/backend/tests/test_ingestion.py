@@ -565,6 +565,24 @@ def test_transcribed_reading_becomes_candidate_with_element_score_node_and_evide
     assert candidate.derivation == ""
 
 
+def test_transcribed_reading_ignores_extraneous_derivation_fields():
+    readings = {
+        "wet_ore_input_tons": FieldReading(
+            basis="transcribed",
+            evidence="Bijih basah | 10.000 | ton",
+            raw_value="10.000",
+            operands=["10.000", "6.800"],
+            operation="ratio",
+        )
+    }
+
+    [candidate] = readings_to_candidates(readings, _twostage_doc())
+
+    assert candidate.value == 10000.0
+    assert candidate.basis == "transcribed"
+    assert candidate.derivation == ""
+
+
 def test_derived_reading_carries_python_result_minimum_score_and_exact_derivation():
     readings = {
         "moisture_content_pct": FieldReading(
