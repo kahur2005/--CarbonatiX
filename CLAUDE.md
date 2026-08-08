@@ -20,17 +20,17 @@ code, comments and docs are in English.
 Backend (`carbonatix/backend`, Python 3.11+, venv at `.venv`):
 
 ```bash
-.venv/Scripts/python.exe -m pytest -q              # full suite (221 tests, ~10s)
+.venv/Scripts/python.exe -m pytest -q              # full suite (277 tests, ~14s)
 .venv/Scripts/python.exe -m pytest tests/test_calculator_golden.py -q
 .venv/Scripts/python.exe -m pytest -k "biocoke" -q # single test by name
 .venv/Scripts/python.exe -m ruff check app tests
-.venv/Scripts/python.exe -m uvicorn app.main:app --reload   # :8000
+.venv/Scripts/python.exe -m uvicorn app.main:app --env-file .env --reload # :8000
 ```
 
 Frontend (`carbonatix/frontend`, Next.js 16.3):
 
 ```bash
-npx vitest run                          # full suite (106 tests)
+npx vitest run                          # full suite (115 tests)
 npx vitest run lib/units.test.ts        # single file
 npx vitest run -t "rejects out of range"
 npx tsc --noEmit                        # type check
@@ -42,12 +42,14 @@ npx playwright test                     # e2e/full-flow.spec.ts — needs live S
 Models (`ml/`) are trained manually and the pickles committed; nothing trains at request
 time. `python ml/train_nickel.py`, `python ml/train_carbon.py`.
 
-Environment. Both `.env.example` files were deleted, so the variables are only discoverable
-from the code that reads them. Backend: `DATABASE_URL`, `SUPABASE_URL` (the JWKS URL is
-derived from it), `ELICE_API_KEY` / `ELICE_BASE_URL` / optional `ELICE_MODEL` (advisor),
-`ANTHROPIC_API_KEY` (vision OCR). Frontend: `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_SUPABASE_URL`,
-`NEXT_PUBLIC_SUPABASE_ANON_KEY`, plus `E2E_EXISTING_USER_*` for Playwright. There is no
-`SUPABASE_JWT_SECRET` — see the auth invariant below.
+Environment. The backend `.env.example` is a placeholder-only template; the frontend
+`.env.example` remains absent. Backend: `DATABASE_URL`, `SUPABASE_URL` (the JWKS URL is
+derived from it), `SUPABASE_SERVICE_ROLE_KEY`, and one `ELICE_API_KEY` shared by two
+model-specific deployments: `ELICE_BASE_URL` for GPT-5.6 Sol and required `HELPY_BASE_URL`
+for document vision. The two base URLs are not interchangeable. Frontend:
+`NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, plus
+`E2E_EXISTING_USER_*` for Playwright. There is no `SUPABASE_JWT_SECRET` — see the auth
+invariant below.
 
 ## Architecture
 
@@ -66,8 +68,9 @@ Every AI provider call happens inside FastAPI — no model API key ever reaches 
   it was computed against, so reopening it never shows today's prices against yesterday's
   emissions.
 - `forecasting/service.py` — loads pre-trained Prophet pickles from `forecasting/artifacts/`.
-- `ingestion/vision.py` + `mapping.py` — Claude vision OCR. Returns *candidates* only;
-  a candidate can never become a stored value without a separate explicit user action.
+- `ingestion/` — Helpy reads documents, GPT-5.6 Sol identifies fields, pure Python verifies
+  and computes, and `mapping.py` returns review candidates. A candidate can never become a
+  stored value without a separate explicit user action.
 - `advisor/` — `corpus.py` (regulation clauses), `prompt.py`, `pipeline.py` (four-stage
   SSE stream).
 - `recommendation.py` — reconstructs a stored run into `EmissionResult`/`CompliancePosition`
@@ -142,8 +145,8 @@ boundaries are a user-facing contract, not internal structure to refactor away**
 Provider wiring, all in `pipeline.py`:
 
 - The model is reached through **Elice ML API, an OpenAI-compatible gateway** — hence the OpenAI
-  SDK pointed at a custom `base_url`, not a vendor SDK. (`anthropic` remains a dependency solely
-  for `ingestion/vision.py`.)
+  SDK pointed at a custom `base_url`, not a vendor SDK. The same Elice key also authenticates
+  Helpy's separate document-vision deployment.
 - The gateway **rejects any parameter outside its documented allowlist with a 400** rather than
   ignoring it. Supported: `model`, `messages`, `max_completion_tokens`, `temperature`, `top_p`,
   `stop`, `stream`, `tools`, `tool_choice`, `response_format`, `reasoning_effort`;
@@ -194,17 +197,37 @@ Two independent safety mechanisms, and they are the point of the layer:
    text*, never globally, so a fabricated "110 ton" cannot launder through by matching an
    article number.
 
-### Vision OCR (`ingestion/`)
+### Ingestion — two AI stages, and Python in between
 
-`claude-sonnet-5` through the Anthropic SDK directly (`ANTHROPIC_API_KEY`), routing PDFs to a
-`document` block and images to an `image` block. Two failure levels that must not be conflated:
-a malformed *response* raises `ExtractionFailed` → 502 "enter the values manually"; a malformed
-*field* inside a readable document becomes `None` via `sanitize_leaf` and never discards the
-fields that read cleanly. `sanitize_leaf` rejects strings, bools, `NaN`/`Infinity` and nested
-values rather than coercing — turning `"32"` into `32.0` is exactly the guess this path refuses
-to make. `FIELDS_BY_PROFILE` in `mapping.py` is the single source of truth for which fields the
-model is asked for, so the ask can never drift from the set of fields that have a twin node to
-land in. Untested against a real document — every test mocks `AsyncAnthropic`.
+`POST /documents` runs both stages inside one synchronous request, with a 20 MiB upload cap.
+Neither stage writes a value: the output is always review candidates, and a candidate reaches
+an input only after the user explicitly clicks **Terima**.
+
+**Stage 1 — `document_vision.py`.** Helpy Document Vision (`HELPY_BASE_URL`, authenticating
+with the shared `ELICE_API_KEY` — there is no `HELPY_API_KEY`). It submits at
+`POST /v1/documents`, then polls `GET /v1/jobs/{id}` under a 90-second budget. **Poll on
+`/v1/jobs/{id}`, not the `/jobs/{id}` the vendor docs list — that path 404s.** `/healthz` and
+`/readyz` also require authorization despite being documented as open. The result is a
+normalized `ParsedDocument`, never Helpy's own JSON, so a provider swap cannot leak a response
+shape downstream. Helpy accepts PDF/PPT/PPTX/PNG/JPEG/JPG — **not XLSX**, despite PRD §10.
+
+**Stage 2 — `interpret.py`.** `gpt-5.6-sol` uses `ELICE_BASE_URL` with an 8,000-token
+completion cap. For every requested profile field it returns either verbatim `evidence` and
+the printed `raw_value`, or verbatim `operands` plus a named `operation`. It never returns a
+computed value, and every requested field is represented so omission becomes "not found"
+rather than a missing key.
+
+**Verification — `verify.py`.** Pure Python, with no model client or network access. It
+requires complete Indonesian number-token matches: transcribed figures must occur verbatim
+inside their cited evidence, while every derived operand must occur verbatim in the document.
+It parses Indonesian thousands, decimal and percent notation strictly, then computes only the
+closed operation set `difference_over_total`, `ratio`, and `percentage_of_total`; it never
+uses `eval`. Anything unverifiable becomes a blank for manual entry.
+
+**`mapping.py`.** Verified readings become review `Candidate`s carrying `basis`, `evidence`,
+and `derivation` disclosures. `confidence` is Helpy's real element score, but
+`confidence_is_placeholder` remains `True` because that score describes an element, not an
+individual field.
 
 ## Invariants
 
@@ -264,8 +287,9 @@ is a second line of defence for JWT-scoped clients only.
 
 - **No test may make a real model API call**, and there are no provider keys in the test
   environment. Advisor tests monkeypatch `pipeline._call_model`; the few that pin the wire-level
-  request monkeypatch `AsyncOpenAI` itself. Vision tests mock `AsyncAnthropic`. A test that would
-  need a live key is not written — that is what the Playwright e2e spec is for.
+  request monkeypatch `AsyncOpenAI` itself. Ingestion tests replace `AsyncOpenAI` and
+  `httpx.AsyncClient` at their client boundaries. A test that would need a live key is not
+  written — that is what the Playwright e2e spec is for.
 - `dependency_overrides` must be set in **function-scoped autouse fixtures**, never as bare
   module-level code. Top-level assignment applies at pytest collection and silently bypasses
   real JWT verification in `test_auth.py`.
