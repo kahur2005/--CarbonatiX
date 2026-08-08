@@ -1203,7 +1203,7 @@ reading, so an omission is 'not found' rather than a missing key."
 - Consumes: `FieldReading` (Task 3), `verified_value` (Task 2), `ParsedDocument` (Task 1).
 - Produces: `readings_to_candidates(readings: dict[str, FieldReading], doc: ParsedDocument) -> list[Candidate]`, and `Candidate` gaining `basis`, `evidence`, `derivation`.
 
-**Note.** `to_candidates` stays exactly as it is — it is still used by the existing tests and is the deterministic mapping layer. The new function sits beside it and reuses `_normalise` and `NODE_FOR_FIELD`.
+**Note.** `readings_to_candidates` reuses `_normalise` and `NODE_FOR_FIELD` and must fully replace `to_candidates`, which **Task 5 deletes** along with `sanitize_leaf`. Ruled 2026-08-08: after Task 5 removes the only production caller (`main.py:152`), both functions would survive purely to satisfy their own tests, which is dead code. Do not add behaviour to `to_candidates` in this task, and do not rely on it surviving.
 
 **Two traps in this task, both of which fail in ways that look unrelated to the change:**
 
@@ -1657,13 +1657,38 @@ async def post_document(
     )
 ```
 
-- [ ] **Step 4: Delete the superseded module and its tests**
+- [ ] **Step 4: Delete the superseded module and the now-orphaned mappers**
 
 ```bash
 git rm carbonatix/backend/app/ingestion/vision.py
 ```
 
 In `tests/test_ingestion.py`, delete every test whose name begins `test_extract_` (they target the removed module), and remove the `from app.ingestion.vision import ...` import and the `anthropic_key` fixture if nothing else uses it.
+
+**Also delete `to_candidates` and `sanitize_leaf` from `mapping.py`** and drop both from `__all__`, leaving `__all__ = ["FIELDS_BY_PROFILE", "NODE_FOR_FIELD", "Candidate", "readings_to_candidates"]`. Removing `main.py`'s old route left them with no production caller; keeping production code alive only for its own tests is dead code. Keep `_normalise` and `_FRACTION_FIELDS` — `readings_to_candidates` uses them.
+
+Their tests split three ways. **Do not delete coverage wholesale** — this is the difference between removing dead code and quietly reducing the test suite:
+
+*Retarget to `readings_to_candidates`* (the behaviour still exists and must stay covered) — rewrite each to build a `FieldReading` + `ParsedDocument` the way the Task 4 tests do:
+
+- `test_unreadable_field_becomes_a_blank_candidate_not_a_guess`
+- `test_low_confidence_is_flagged_not_dropped`
+- `test_candidates_are_never_marked_accepted`
+- `test_percentages_are_normalised_to_fractions`
+- `test_percentage_at_or_below_one_is_left_alone`
+- `test_unmapped_field_is_dropped_not_fabricated_into_a_candidate`
+
+*Keep unchanged* (they assert on `Candidate`/`NODE_FOR_FIELD` directly, not through the deleted functions):
+
+- `test_every_operational_field_maps_to_exactly_one_node`
+- `test_candidate_has_no_accepted_field_at_all` — a Global Constraint; it must still pass
+
+*Delete* (they exercise raw-JSON-leaf semantics that no longer exist anywhere — stage 2 returns strings, and hostile input is now rejected by `verify.parse_id_number`, which Task 2 covers with its own `test_unparseable_text_is_none_not_a_guess`):
+
+- `test_to_candidates_never_raises_on_hostile_leaf_value`
+- `test_sanitize_leaf_accepts_only_finite_numbers_or_none`
+
+Finally, `app/schemas.py:175` mentions `mapping.to_candidates`'s 0.75 — that reference dies with the function. Task 4 already replaces that docstring; confirm no stale mention of `to_candidates` or `sanitize_leaf` survives anywhere: `grep -rn "to_candidates\|sanitize_leaf" carbonatix/backend/app carbonatix/backend/tests` should return nothing but the retargeted test names.
 
 In `pyproject.toml`, delete the `"anthropic>=0.40",` line and update the comment above the `openai` dependency to:
 
