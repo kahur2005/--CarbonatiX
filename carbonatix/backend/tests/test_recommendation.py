@@ -6,7 +6,7 @@ The route wires `recommendation.load` (DB fetch + reconstruction) to
 `recommendation.format_stream` (SSE framing) in main.py; this module
 exercises the whole path through a real `TestClient`, with the database
 faked via `fake_db` (see conftest.py) and the model call monkeypatched
-(there is no ANTHROPIC_API_KEY in this environment).
+(so no real provider call is possible).
 """
 
 import json

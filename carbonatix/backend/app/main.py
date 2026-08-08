@@ -12,8 +12,10 @@ from .auth import current_user_id
 from .emissions.calculator import calculate_emissions
 from .errors import validation_exception_handler
 from .forecasting.service import ForecastUnavailable, current_forecast
-from .ingestion.mapping import to_candidates
-from .ingestion.vision import ExtractionFailed, extract
+from .ingestion.document_vision import ExtractionFailed
+from .ingestion.document_vision import parse as parse_document
+from .ingestion.interpret import interpret as interpret_fields
+from .ingestion.mapping import readings_to_candidates
 from .schemas import (
     CandidateResponse,
     CompanyRequest,
@@ -27,6 +29,8 @@ from .schemas import (
 )
 
 app = FastAPI(title="SmartSmelt ERP API", version="2.0")
+
+_MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
 app.add_middleware(
     CORSMiddleware,
@@ -136,20 +140,23 @@ async def post_document(
     `calculation_runs` -- see `app/ingestion/mapping.py` for why a
     `Candidate` cannot become a stored value without a separate, explicit
     user action that this route does not perform.
-
-    `extract` and `to_candidates` both run inside the same `try`: a
-    malformed *document* (extraction fails outright) and a malformed
-    *field* within an otherwise-readable document (a hostile leaf value
-    `to_candidates` cannot make sense of) must both fall through to the
-    same "could not read, enter manually" response rather than an
-    unhandled 500 -- see `mapping.sanitize_leaf` for the field-level half
-    of that guarantee; this `try` is the belt-and-braces half.
     """
     if profile not in ("site_spec", "operational"):
         raise HTTPException(status_code=422, detail="Unknown document profile")
+    file_bytes = await file.read(_MAX_UPLOAD_BYTES + 1)
+    if len(file_bytes) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail="Dokumen terlalu besar. Maksimum 20 MB.",
+        )
     try:
-        raw = await extract(await file.read(), file.content_type or "image/jpeg", profile)
-        candidates = to_candidates(raw, profile)
+        parsed = await parse_document(
+            file_bytes,
+            file.content_type or "application/pdf",
+            file.filename or "document",
+        )
+        readings = await interpret_fields(parsed, profile)
+        candidates = readings_to_candidates(readings, parsed)
     except ExtractionFailed as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

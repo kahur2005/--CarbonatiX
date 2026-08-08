@@ -1,5 +1,6 @@
-"""Document ingestion: vision extraction and candidate mapping.
+"""Two-stage document ingestion and candidate mapping.
 
 Nothing in this package writes to the database. See `mapping.py` for the
-`Candidate` contract and `vision.py` for the model call it is built on.
+`Candidate` contract, `document_vision.py` for parsing, and `interpret.py`
+for field identification.
 """

@@ -1,27 +1,22 @@
-"""Vision extraction and candidate mapping.
+"""Two-stage document ingestion and candidate mapping."""
 
-`mapping.py` is pure and is tested directly. `vision.py` talks to the
-Anthropic API, so every test here mocks the client -- there is no
-ANTHROPIC_API_KEY in this environment and no real smelter documents to
-exercise against. See task-12-report.md for what remains unverified as a
-result (real-document OCR quality, rotated-scan handling, etc).
-"""
-
-import json
+import math
 import uuid
-from typing import ClassVar
+from io import BytesIO
 
 import pytest
+from fastapi import UploadFile
 from fastapi.testclient import TestClient
 
 from app.auth import current_user_id
-from app.ingestion.document_vision import Element, ParsedDocument
+from app.ingestion.document_vision import Element, ExtractionFailed, ParsedDocument
 from app.ingestion.interpret import FieldReading
-from app.ingestion.mapping import NODE_FOR_FIELD, readings_to_candidates, to_candidates
-from app.main import app
+from app.ingestion.mapping import NODE_FOR_FIELD, Candidate, readings_to_candidates
+from app.main import app, post_document
 from app.schemas import CandidateResponse, DocumentExtractionResponse
 
 USER = uuid.uuid4()
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 client = TestClient(app)
 
 
@@ -69,315 +64,104 @@ def test_every_operational_field_maps_to_exactly_one_node():
 
 
 def test_unreadable_field_becomes_a_blank_candidate_not_a_guess():
-    cands = to_candidates(
-        {"wet_ore_input_tons": 10000.0, "moisture_content_pct": None}, "operational"
+    [candidate] = readings_to_candidates(
+        {"moisture_content_pct": FieldReading()},
+        ParsedDocument(elements=[], page_count=1),
     )
-    by_field = {c.field: c for c in cands}
-    assert by_field["moisture_content_pct"].value is None
-    assert by_field["moisture_content_pct"].confidence == 0.0
+
+    assert candidate.value is None
+    assert candidate.confidence == 0.0
 
 
 def test_low_confidence_is_flagged_not_dropped():
-    cands = to_candidates(
-        {"nickel_grade_pct": 0.018}, "operational", confidences={"nickel_grade_pct": 0.3}
+    evidence = "Kadar nikel | 0,018"
+    doc = ParsedDocument(
+        elements=[Element("table", evidence, None, 0.3, 0)],
+        page_count=1,
     )
-    assert cands[0].confidence == 0.3
-    assert cands[0].value == 0.018
+    [candidate] = readings_to_candidates(
+        {
+            "nickel_grade_pct": FieldReading(
+                basis="transcribed",
+                evidence=evidence,
+                raw_value="0,018",
+            )
+        },
+        doc,
+    )
+
+    assert candidate.confidence == 0.3
+    assert candidate.value == 0.018
 
 
 def test_candidates_are_never_marked_accepted():
     """No code path may write an extracted value without an explicit user
     accept. This test is the guard on that rule."""
-    for c in to_candidates({"wet_ore_input_tons": 10000.0}, "operational"):
-        assert not hasattr(c, "accepted") or c.accepted is False
+    [candidate] = readings_to_candidates(
+        {"wet_ore_input_tons": FieldReading()},
+        ParsedDocument(elements=[], page_count=1),
+    )
+    assert not hasattr(candidate, "accepted")
 
 
 def test_percentages_are_normalised_to_fractions():
     """A document saying '32%' must arrive as 0.32, never 32."""
-    cands = to_candidates({"moisture_content_pct": 32.0}, "operational")
-    assert cands[0].value == pytest.approx(0.32)
+    evidence = "Kadar air | 32 | %"
+    doc = ParsedDocument(
+        elements=[Element("table", evidence, None, 0.9, 0)],
+        page_count=1,
+    )
+    [candidate] = readings_to_candidates(
+        {
+            "moisture_content_pct": FieldReading(
+                basis="transcribed",
+                evidence=evidence,
+                raw_value="32",
+            )
+        },
+        doc,
+    )
+    assert candidate.value == pytest.approx(0.32)
 
 
 def test_percentage_at_or_below_one_is_left_alone():
     """0.32 is already a fraction; dividing it again would be a second,
     silent corruption of the same field."""
-    cands = to_candidates({"moisture_content_pct": 0.32}, "operational")
-    assert cands[0].value == pytest.approx(0.32)
+    evidence = "Kadar air | 0,32"
+    doc = ParsedDocument(
+        elements=[Element("table", evidence, None, 0.9, 0)],
+        page_count=1,
+    )
+    [candidate] = readings_to_candidates(
+        {
+            "moisture_content_pct": FieldReading(
+                basis="transcribed",
+                evidence=evidence,
+                raw_value="0,32",
+            )
+        },
+        doc,
+    )
+    assert candidate.value == pytest.approx(0.32)
 
 
 def test_unmapped_field_is_dropped_not_fabricated_into_a_candidate():
-    """A raw field with no twin node is dropped rather than surfaced as an
+    """A reading with no twin node is dropped rather than surfaced as an
     uneditable, unplaceable candidate."""
-    cands = to_candidates({"totally_unknown_field": 1.0}, "operational")
-    assert cands == []
+    assert (
+        readings_to_candidates(
+            {"totally_unknown_field": FieldReading()},
+            ParsedDocument(elements=[], page_count=1),
+        )
+        == []
+    )
 
 
 def test_candidate_has_no_accepted_field_at_all():
     """The dataclass itself carries no acceptance flag -- there is nothing
     to flip to True by mistake."""
-    from app.ingestion.mapping import Candidate
-
     field_names = {f for f in Candidate.__dataclass_fields__}
     assert "accepted" not in field_names
-
-
-@pytest.mark.parametrize(
-    "hostile_value",
-    [
-        pytest.param("32", id="string"),
-        pytest.param({"nested": "object"}, id="nested-object"),
-        pytest.param([1, 2, 3], id="list"),
-        pytest.param(float("nan"), id="nan"),
-        pytest.param(float("inf"), id="positive-infinity"),
-        pytest.param(float("-inf"), id="negative-infinity"),
-        pytest.param(True, id="bool"),
-    ],
-)
-def test_to_candidates_never_raises_on_hostile_leaf_value(hostile_value):
-    """Regression test for a review finding: a string on a fraction field
-    (e.g. `"32"`) used to reach `_normalise`'s `value > 1.0` comparison
-    unguarded and raise `TypeError: '>' not supported between instances of
-    'str' and 'float'`. `NaN`/`Infinity` used to pass straight through as a
-    normal-looking value with the same 0.75 confidence as a clean read.
-    `to_candidates` must not raise on any of these, and must report every
-    one of them as unreadable (value=None, confidence=0.0) rather than a
-    confident-looking garbage value -- belt and braces on top of
-    `vision.extract`'s own sanitisation, in case a future caller ever
-    hands raw, unsanitised model output to this function directly."""
-    cands = to_candidates({"moisture_content_pct": hostile_value}, "operational")
-    assert cands[0].value is None
-    assert cands[0].confidence == 0.0
-
-
-def test_sanitize_leaf_accepts_only_finite_numbers_or_none():
-    from app.ingestion.mapping import sanitize_leaf
-
-    assert sanitize_leaf(None) is None
-    assert sanitize_leaf(32) == 32.0
-    assert sanitize_leaf(0.32) == 0.32
-    assert sanitize_leaf("32") is None
-    assert sanitize_leaf(True) is None
-    assert sanitize_leaf(False) is None
-    assert sanitize_leaf([1, 2]) is None
-    assert sanitize_leaf({"a": 1}) is None
-    assert sanitize_leaf(float("nan")) is None
-    assert sanitize_leaf(float("inf")) is None
-    assert sanitize_leaf(float("-inf")) is None
-
-
-# ---------------------------------------------------------------------------
-# vision.py -- Anthropic client is always mocked; never a real API call.
-# ---------------------------------------------------------------------------
-
-
-class _FakeTextBlock:
-    def __init__(self, text: str):
-        self.text = text
-
-
-class _FakeMessage:
-    def __init__(self, text: str):
-        self.content = [_FakeTextBlock(text)]
-
-
-class _FakeMessages:
-    def __init__(self, response_text: str, capture: dict):
-        self._response_text = response_text
-        self._capture = capture
-
-    async def create(self, **kwargs):
-        self._capture["kwargs"] = kwargs
-        return _FakeMessage(self._response_text)
-
-
-class _FakeAsyncAnthropic:
-    """Stands in for anthropic.AsyncAnthropic. No network call is possible
-    through this class."""
-
-    last_capture: ClassVar[dict] = {}
-
-    def __init__(self, *args, **kwargs):
-        self.messages = _FakeMessages(self.__class__._response_text, self.last_capture)
-
-
-def _make_fake_client(response_text: str):
-    captured: dict = {}
-
-    class _Client(_FakeAsyncAnthropic):
-        _response_text = response_text
-        last_capture = captured
-
-    return _Client, captured
-
-
-@pytest.fixture
-def anthropic_key(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-real")
-
-
-async def _extract_with_mocked_client(monkeypatch, response_text, *, media_type="image/png"):
-    from app.ingestion import vision
-
-    fake_client_cls, captured = _make_fake_client(response_text)
-    monkeypatch.setattr(vision, "AsyncAnthropic", fake_client_cls)
-    result = await vision.extract(b"fake-bytes", media_type, "operational")
-    return result, captured
-
-
-@pytest.mark.asyncio
-async def test_extract_requests_exactly_the_fields_for_the_profile(monkeypatch, anthropic_key):
-    from app.ingestion import vision
-
-    fake_client_cls, captured = _make_fake_client(
-        json.dumps({f: None for f in vision._FIELDS["site_spec"]})
-    )
-    monkeypatch.setattr(vision, "AsyncAnthropic", fake_client_cls)
-
-    await vision.extract(b"fake-bytes", "application/pdf", "site_spec")
-
-    prompt_text = captured["kwargs"]["messages"][0]["content"][1]["text"]
-    for field in vision._FIELDS["site_spec"]:
-        assert field in prompt_text
-    for field in vision._FIELDS["operational"]:
-        assert field not in prompt_text
-
-
-@pytest.mark.asyncio
-async def test_extract_returns_none_for_fields_the_model_omitted(monkeypatch, anthropic_key):
-    # Model only reports two of the six operational fields; the rest must
-    # come back as None, never guessed or dropped from the result.
-    result, _ = await _extract_with_mocked_client(
-        monkeypatch,
-        json.dumps({"wet_ore_input_tons": 12000.0, "moisture_content_pct": 31.0}),
-    )
-    assert result["wet_ore_input_tons"] == 12000.0
-    assert result["moisture_content_pct"] == 31.0
-    assert result["nickel_grade_pct"] is None
-    assert result["reductant_biocoke_pct"] is None
-    assert result["power_mix_captive_coal"] is None
-    assert result["power_mix_hydro_grid"] is None
-
-
-@pytest.mark.asyncio
-async def test_extract_uses_document_block_for_pdf(monkeypatch, anthropic_key):
-    from app.ingestion import vision
-
-    fake_client_cls, captured = _make_fake_client(json.dumps({}))
-    monkeypatch.setattr(vision, "AsyncAnthropic", fake_client_cls)
-
-    await vision.extract(b"%PDF-fake", "application/pdf", "operational")
-
-    block = captured["kwargs"]["messages"][0]["content"][0]
-    assert block["type"] == "document"
-    assert block["source"]["media_type"] == "application/pdf"
-
-
-@pytest.mark.asyncio
-async def test_extract_uses_image_block_for_photo(monkeypatch, anthropic_key):
-    from app.ingestion import vision
-
-    fake_client_cls, captured = _make_fake_client(json.dumps({}))
-    monkeypatch.setattr(vision, "AsyncAnthropic", fake_client_cls)
-
-    await vision.extract(b"\x89PNG-fake", "image/png", "operational")
-
-    block = captured["kwargs"]["messages"][0]["content"][0]
-    assert block["type"] == "image"
-    assert block["source"]["media_type"] == "image/png"
-
-
-@pytest.mark.asyncio
-async def test_extract_raises_extraction_failed_on_non_json_response(monkeypatch, anthropic_key):
-    from app.ingestion.vision import ExtractionFailed
-
-    with pytest.raises(ExtractionFailed):
-        await _extract_with_mocked_client(monkeypatch, "Sorry, I cannot read this document.")
-
-
-@pytest.mark.asyncio
-async def test_extract_raises_extraction_failed_on_non_object_json(monkeypatch, anthropic_key):
-    """A syntactically valid JSON array is not a field map -- it must fail
-    loudly, not be silently mistaken for an empty or partial extraction."""
-    from app.ingestion.vision import ExtractionFailed
-
-    with pytest.raises(ExtractionFailed):
-        await _extract_with_mocked_client(monkeypatch, json.dumps([1, 2, 3]))
-
-
-@pytest.mark.asyncio
-async def test_extract_raises_extraction_failed_when_client_call_raises(monkeypatch, anthropic_key):
-    from app.ingestion import vision
-    from app.ingestion.vision import ExtractionFailed
-
-    class _BoomMessages:
-        async def create(self, **kwargs):
-            raise ConnectionError("network unreachable")
-
-    class _BoomClient:
-        def __init__(self, *args, **kwargs):
-            self.messages = _BoomMessages()
-
-    monkeypatch.setattr(vision, "AsyncAnthropic", _BoomClient)
-
-    with pytest.raises(ExtractionFailed):
-        await vision.extract(b"fake-bytes", "image/png", "operational")
-
-
-@pytest.mark.asyncio
-async def test_extract_fails_loudly_when_api_key_missing(monkeypatch):
-    """No ANTHROPIC_API_KEY must never crash with a raw 500-shaped
-    KeyError -- it is exactly the "vision unavailable" case the /documents
-    route already knows how to turn into a 502."""
-    from app.ingestion import vision
-    from app.ingestion.vision import ExtractionFailed
-
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    with pytest.raises(ExtractionFailed):
-        await vision.extract(b"fake-bytes", "image/png", "operational")
-
-
-@pytest.mark.asyncio
-async def test_extract_reports_string_value_as_unreadable_not_a_raise(monkeypatch, anthropic_key):
-    """A model that prints a number as a quoted string must not have it
-    coerced (`"10000"` -> `10000.0`) -- that is a guess -- and must not
-    raise either. It is reported unreadable, same as a `null`."""
-    result, _ = await _extract_with_mocked_client(
-        monkeypatch, json.dumps({"wet_ore_input_tons": "10000"})
-    )
-    assert result["wet_ore_input_tons"] is None
-
-
-@pytest.mark.asyncio
-async def test_extract_reports_nested_object_as_unreadable(monkeypatch, anthropic_key):
-    result, _ = await _extract_with_mocked_client(
-        monkeypatch, json.dumps({"wet_ore_input_tons": {"value": 10000, "unit": "t"}})
-    )
-    assert result["wet_ore_input_tons"] is None
-
-
-@pytest.mark.asyncio
-async def test_extract_reports_bool_value_as_unreadable(monkeypatch, anthropic_key):
-    """`true`/`false` must not be read as `1.0`/`0.0` -- Python's `bool` is
-    an `int` subclass and would otherwise slip past a naive numeric check."""
-    result, _ = await _extract_with_mocked_client(
-        monkeypatch, json.dumps({"wet_ore_input_tons": True})
-    )
-    assert result["wet_ore_input_tons"] is None
-
-
-@pytest.mark.asyncio
-async def test_extract_reports_nan_as_unreadable(monkeypatch, anthropic_key):
-    """`json.loads` accepts the bare `NaN` literal as a non-standard
-    extension; a model emitting one must not have it treated as a real
-    reading with a normal-looking confidence."""
-    result, _ = await _extract_with_mocked_client(monkeypatch, '{"wet_ore_input_tons": NaN}')
-    assert result["wet_ore_input_tons"] is None
-
-
-@pytest.mark.asyncio
-async def test_extract_reports_infinity_as_unreadable(monkeypatch, anthropic_key):
-    result, _ = await _extract_with_mocked_client(monkeypatch, '{"wet_ore_input_tons": Infinity}')
-    assert result["wet_ore_input_tons"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -395,7 +179,16 @@ def test_documents_requires_auth():
     assert r.status_code == 401
 
 
-def test_documents_rejects_unknown_profile():
+def test_documents_rejects_unknown_profile_without_provider_calls(monkeypatch):
+    async def _must_not_parse(*args, **kwargs):
+        pytest.fail("parse must not run for an unknown profile")
+
+    async def _must_not_interpret(*args, **kwargs):
+        pytest.fail("interpret must not run for an unknown profile")
+
+    monkeypatch.setattr("app.main.parse_document", _must_not_parse, raising=False)
+    monkeypatch.setattr("app.main.interpret_fields", _must_not_interpret, raising=False)
+
     r = client.post(
         "/documents",
         files={"file": ("report.png", b"fake", "image/png")},
@@ -404,21 +197,54 @@ def test_documents_rejects_unknown_profile():
     assert r.status_code == 422
 
 
-def test_documents_returns_candidates_and_persists_nothing(monkeypatch):
-    from app.ingestion import vision
+def test_documents_runs_two_stage_pipeline_and_returns_enriched_unaccepted_candidates(
+    monkeypatch,
+):
+    calls = []
+    parsed = ParsedDocument(
+        elements=[Element("table", "Bijih basah | 10.000 | ton", None, 0.96, 0)],
+        page_count=1,
+    )
+    readings = {
+        "wet_ore_input_tons": FieldReading(
+            basis="transcribed",
+            evidence="Bijih basah | 10.000 | ton",
+            raw_value="10.000",
+            note="tabel produksi",
+        )
+    }
 
-    async def _fake_extract(file_bytes, media_type, profile):
-        return {
-            "wet_ore_input_tons": 10000.0,
-            "moisture_content_pct": 32.0,
-            "nickel_grade_pct": None,
-            "reductant_biocoke_pct": None,
-            "power_mix_captive_coal": None,
-            "power_mix_hydro_grid": None,
-        }
+    async def _fake_parse(file_bytes, media_type, filename):
+        calls.append(("parse", file_bytes, media_type, filename))
+        return parsed
 
-    monkeypatch.setattr(vision, "extract", _fake_extract)
-    monkeypatch.setattr("app.main.extract", _fake_extract)
+    async def _fake_interpret(doc, profile):
+        calls.append(("interpret", doc, profile))
+        return readings
+
+    def _fake_mapping(actual_readings, doc):
+        calls.append(("map", actual_readings, doc))
+        return [
+            Candidate(
+                field="wet_ore_input_tons",
+                value=10000.0,
+                confidence=0.96,
+                node="stockpile",
+                source_hint="tabel produksi",
+                basis="transcribed",
+                evidence="Bijih basah | 10.000 | ton",
+                derivation="",
+            )
+        ]
+
+    async def _must_not_write(*args, **kwargs):
+        pytest.fail("document route must not persist candidates")
+
+    monkeypatch.setattr("app.main.parse_document", _fake_parse, raising=False)
+    monkeypatch.setattr("app.main.interpret_fields", _fake_interpret, raising=False)
+    monkeypatch.setattr("app.main.readings_to_candidates", _fake_mapping, raising=False)
+    monkeypatch.setattr("app.companies.save", _must_not_write)
+    monkeypatch.setattr("app.runs.commit", _must_not_write)
 
     r = client.post(
         "/documents",
@@ -427,32 +253,105 @@ def test_documents_returns_candidates_and_persists_nothing(monkeypatch):
     )
     assert r.status_code == 200
     body = r.json()
-    assert "candidates" in body
-    by_field = {c["field"] for c in body["candidates"]}
-    assert "wet_ore_input_tons" in by_field
-    # Normalisation happened before the candidate reached the wire.
-    moisture = next(c for c in body["candidates"] if c["field"] == "moisture_content_pct")
-    assert moisture["value"] == pytest.approx(0.32)
-    unreadable = next(c for c in body["candidates"] if c["field"] == "nickel_grade_pct")
-    assert unreadable["value"] is None
-    assert unreadable["confidence"] == 0.0
-    # No "accepted" key anywhere in the wire payload -- nothing here can be
-    # mistaken for an already-written value.
-    for c in body["candidates"]:
-        assert "accepted" not in c
-    # Confidence is a flat constant, not model-derived -- the response says
-    # so explicitly rather than letting a frontend mistake 0.75 for a real
-    # per-field reliability score.
+    assert [call[0] for call in calls] == ["parse", "interpret", "map"]
+    assert calls[0][1:] == (b"fake", "image/png", "report.png")
+    assert calls[1][1:] == (parsed, "operational")
+    assert calls[2][1:] == (readings, parsed)
+    assert body["candidates"] == [
+        {
+            "field": "wet_ore_input_tons",
+            "value": 10000.0,
+            "confidence": 0.96,
+            "node": "stockpile",
+            "sourceHint": "tabel produksi",
+            "basis": "transcribed",
+            "evidence": "Bijih basah | 10.000 | ton",
+            "derivation": "",
+        }
+    ]
+    assert math.isfinite(body["candidates"][0]["confidence"])
+    assert "accepted" not in body["candidates"][0]
     assert body["confidenceIsPlaceholder"] is True
 
 
-def test_documents_returns_502_when_extraction_fails(monkeypatch):
-    from app.ingestion.vision import ExtractionFailed
+@pytest.mark.asyncio
+async def test_documents_uses_parse_fallbacks_for_missing_content_type_and_filename(monkeypatch):
+    captured = {}
 
-    async def _fake_extract(file_bytes, media_type, profile):
-        raise ExtractionFailed("model returned garbage")
+    async def _fake_parse(file_bytes, media_type, filename):
+        captured["args"] = (file_bytes, media_type, filename)
+        return ParsedDocument(elements=[], page_count=0)
 
-    monkeypatch.setattr("app.main.extract", _fake_extract)
+    async def _fake_interpret(doc, profile):
+        return {}
+
+    monkeypatch.setattr("app.main.parse_document", _fake_parse, raising=False)
+    monkeypatch.setattr("app.main.interpret_fields", _fake_interpret, raising=False)
+    monkeypatch.setattr("app.main.readings_to_candidates", lambda readings, doc: [], raising=False)
+
+    response = await post_document(
+        file=UploadFile(file=BytesIO(b"fake"), filename=None),
+        profile="operational",
+        user_id=USER,
+    )
+
+    assert response.candidates == []
+    assert captured["args"] == (b"fake", "application/pdf", "document")
+
+
+def test_documents_rejects_upload_above_20_mb_before_provider_calls(monkeypatch):
+    async def _must_not_parse(*args, **kwargs):
+        pytest.fail("parse must not run for an oversized upload")
+
+    async def _must_not_interpret(*args, **kwargs):
+        pytest.fail("interpret must not run for an oversized upload")
+
+    monkeypatch.setattr("app.main.parse_document", _must_not_parse, raising=False)
+    monkeypatch.setattr("app.main.interpret_fields", _must_not_interpret, raising=False)
+
+    r = client.post(
+        "/documents",
+        files={"file": ("report.pdf", b"x" * (MAX_UPLOAD_BYTES + 1), "application/pdf")},
+        data={"profile": "operational"},
+    )
+
+    assert r.status_code == 413
+    assert r.json() == {"detail": "Dokumen terlalu besar. Maksimum 20 MB."}
+
+
+def test_documents_allows_upload_of_exactly_20_mb(monkeypatch):
+    captured = {}
+
+    async def _fake_parse(file_bytes, media_type, filename):
+        captured["size"] = len(file_bytes)
+        return ParsedDocument(elements=[], page_count=0)
+
+    async def _fake_interpret(doc, profile):
+        return {}
+
+    monkeypatch.setattr("app.main.parse_document", _fake_parse, raising=False)
+    monkeypatch.setattr("app.main.interpret_fields", _fake_interpret, raising=False)
+    monkeypatch.setattr("app.main.readings_to_candidates", lambda readings, doc: [], raising=False)
+
+    r = client.post(
+        "/documents",
+        files={"file": ("report.pdf", b"x" * MAX_UPLOAD_BYTES, "application/pdf")},
+        data={"profile": "operational"},
+    )
+
+    assert r.status_code == 200
+    assert captured["size"] == MAX_UPLOAD_BYTES
+
+
+def test_documents_returns_502_when_parse_fails(monkeypatch):
+    async def _fake_parse(file_bytes, media_type, filename):
+        raise ExtractionFailed("Helpy returned garbage")
+
+    async def _must_not_interpret(*args, **kwargs):
+        pytest.fail("interpret must not run after parse failure")
+
+    monkeypatch.setattr("app.main.parse_document", _fake_parse, raising=False)
+    monkeypatch.setattr("app.main.interpret_fields", _must_not_interpret, raising=False)
 
     r = client.post(
         "/documents",
@@ -463,47 +362,15 @@ def test_documents_returns_502_when_extraction_fails(monkeypatch):
     assert "manually" in r.text.lower()
 
 
-@pytest.mark.parametrize(
-    "hostile_value",
-    [
-        pytest.param("32", id="string"),
-        pytest.param({"nested": "object"}, id="nested-object"),
-        pytest.param([1, 2, 3], id="list"),
-        pytest.param(float("nan"), id="nan"),
-        pytest.param(float("inf"), id="positive-infinity"),
-        pytest.param(True, id="bool"),
-    ],
-)
-def test_documents_survives_hostile_leaf_value_from_extract(monkeypatch, hostile_value):
-    """Review finding, reproduced live: a malformed model response used to
-    reach `_normalise`'s `value > 1.0` comparison unguarded. A response of
-    `{"moisture_content_pct": "32", ...}` made that comparison raise
-    `TypeError: '>' not supported between instances of 'str' and 'float'`
-    *outside* the route's `try/except ExtractionFailed` (`to_candidates`
-    used to be called after the try block), so it propagated as a bare
-    500. Separately, a `NaN` value used to sail through `to_candidates`
-    with the same 0.75 confidence as a clean reading.
+def test_documents_returns_502_when_interpretation_fails(monkeypatch):
+    async def _fake_parse(file_bytes, media_type, filename):
+        return ParsedDocument(elements=[], page_count=1)
 
-    This test bypasses `vision.extract`'s own sanitisation entirely by
-    mocking `app.main.extract` to hand back the hostile value directly --
-    simulating "extract() has a bug" or "a future change reopens the raw
-    path" -- to prove the route's own defence (`to_candidates` inside the
-    try, `mapping.sanitize_leaf` inside that) holds independently. Must be
-    a 200 with the offending field marked unreadable, never a 500, and
-    never a confident-looking garbage value.
-    """
+    async def _fake_interpret(doc, profile):
+        raise ExtractionFailed("model returned garbage")
 
-    async def _fake_extract(file_bytes, media_type, profile):
-        return {
-            "wet_ore_input_tons": 10000.0,
-            "moisture_content_pct": hostile_value,
-            "nickel_grade_pct": None,
-            "reductant_biocoke_pct": None,
-            "power_mix_captive_coal": None,
-            "power_mix_hydro_grid": None,
-        }
-
-    monkeypatch.setattr("app.main.extract", _fake_extract)
+    monkeypatch.setattr("app.main.parse_document", _fake_parse, raising=False)
+    monkeypatch.setattr("app.main.interpret_fields", _fake_interpret, raising=False)
 
     r = client.post(
         "/documents",
@@ -511,14 +378,8 @@ def test_documents_survives_hostile_leaf_value_from_extract(monkeypatch, hostile
         data={"profile": "operational"},
     )
 
-    assert r.status_code == 200, r.text
-    body = r.json()
-    hostile = next(c for c in body["candidates"] if c["field"] == "moisture_content_pct")
-    assert hostile["value"] is None
-    assert hostile["confidence"] == 0.0
-    clean = next(c for c in body["candidates"] if c["field"] == "wet_ore_input_tons")
-    assert clean["value"] == 10000.0
-    assert clean["confidence"] == 0.75
+    assert r.status_code == 502
+    assert "manually" in r.text.lower()
 
 
 # --- readings -> candidates (two-stage pipeline) -------------------------
