@@ -15,7 +15,21 @@ from .corpus import PLACEHOLDER_SENTINEL, Clause, has_placeholder_text
 
 __all__ = ["build_prompt", "has_placeholder_text", "unsupported_numerals"]
 
-_NUMERAL = re.compile(r"\d[\d.,]*")
+# A numeral must both start and end with a digit. Internal `.` and `,` are
+# separators (Indonesian writes "1.234,5"), but a trailing one is punctuation
+# belonging to the sentence, not to the number.
+#
+# The naive `\d[\d.,]*` swallows it, and that produced false accusations in
+# both directions of the guard's job:
+#   * "Total emisi 72074.8." captured "72074.8." -- which matches no supplied
+#     figure, so a correctly quoted number was flagged as fabricated. Any
+#     figure ending a sentence hit this.
+#   * "Permen ESDM 2/2023, Perpres 110/2025," captured "2023," and "2025,",
+#     whose spans run one character past the citation text they sit inside,
+#     so `_within_any_span` no longer recognised them as citation digits.
+# Both were observed against the live model on 2026-08-06, on the first real
+# recommendation this pipeline generated.
+_NUMERAL = re.compile(r"\d(?:[\d.,]*\d)?")
 
 # Marks a `permitted` entry as a citation reference rather than a supplied
 # figure. Never collides with a real numeral: entries produced from figures

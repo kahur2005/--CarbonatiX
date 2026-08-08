@@ -20,6 +20,7 @@ detected and surfaced rather than silently passed through as real law.
 from app.advisor.corpus import CORPUS, PLACEHOLDER_SENTINEL, has_placeholder_text, select_clauses
 from app.advisor.prompt import (
     _DIGIT_THEN_MAGNITUDE,
+    _NUMERAL,
     _spelled_out_number_matches,
     build_prompt,
     unsupported_numerals,
@@ -382,3 +383,67 @@ def test_unrelated_digit_and_magnitude_word_far_apart_are_not_linked():
     )
     assert _DIGIT_THEN_MAGNITUDE.search(good) is None
     assert unsupported_numerals(good, permitted) == set()
+
+
+# -- Trailing punctuation must not be read as part of a numeral --------------
+#
+# Both cases below are taken verbatim from the first recommendation the live
+# Fable gateway produced (2026-08-06). The guard flagged that recommendation
+# as containing fabricated figures. It did not: `_NUMERAL` was swallowing the
+# punctuation after each number, so the resulting token matched neither the
+# supplied figure nor the citation span it sat inside.
+#
+# A false accusation here is not a cosmetic bug. `flagged` is what stops a
+# recommendation being presented as advice, so a guard that fires on correct
+# output trains everyone to ignore it -- and it fires on the most ordinary
+# shape there is, a figure at the end of a sentence.
+
+
+def test_supplied_figure_at_end_of_sentence_is_not_flagged():
+    r = calculate_emissions(**NOMINAL)
+    p = assess(r, cap_tco2e=r.total_emissions - 500, carbon_price_idr_per_ton=35200.0)
+    clauses = select_clauses(is_compliant=False)
+    _, permitted = build_prompt(r, p, FORECAST, clauses)
+
+    total = f"{r.total_emissions:.1f}"
+    assert unsupported_numerals(f"Total emisi tercatat {total}.", permitted) == set()
+    assert unsupported_numerals(f"Total emisi tercatat {total}, naik.", permitted) == set()
+
+
+def test_comma_separated_citation_list_is_not_flagged():
+    """The exact list the model wrote: several refs separated by commas. Each
+    ref's digits sit inside a genuine citation span, and the comma that
+    follows belongs to the sentence, not to the year."""
+    r = calculate_emissions(**NOMINAL)
+    p = assess(r, cap_tco2e=r.total_emissions - 500, carbon_price_idr_per_ton=35200.0)
+    clauses = select_clauses(is_compliant=False)
+    _, permitted = build_prompt(r, p, FORECAST, clauses)
+
+    refs = [c.ref for c in clauses]
+    assert "Permen ESDM 2/2023" in refs and "Perpres 110/2025" in refs
+    prose = (
+        "Rekomendasi ini wajib divalidasi terhadap teks resmi: "
+        "Perpres 98/2021 Pasal 47, Permen ESDM 16/2022 Pasal 18, "
+        "Permen ESDM 2/2023, Perpres 110/2025, dan ketentuan SRN-PPI."
+    )
+    assert unsupported_numerals(prose, permitted) == set()
+
+
+def test_fabricated_figure_at_end_of_sentence_is_still_flagged():
+    """The fix trims trailing punctuation; it must not also stop the guard
+    catching a genuinely invented number in the same position."""
+    r = calculate_emissions(**NOMINAL)
+    p = assess(r, cap_tco2e=r.total_emissions - 500, carbon_price_idr_per_ton=35200.0)
+    clauses = select_clauses(is_compliant=False)
+    _, permitted = build_prompt(r, p, FORECAST, clauses)
+
+    assert "999888" in unsupported_numerals("Beli kredit sebanyak 999888.", permitted)
+    assert "999888" in unsupported_numerals("Beli kredit sebanyak 999888, lalu.", permitted)
+
+
+def test_indonesian_decimal_and_thousands_separators_still_parse():
+    """The trailing-separator fix must leave internal separators alone --
+    "1.234,5" is one numeral, not "1" and "234" and "5"."""
+    assert _NUMERAL.findall("nilai 1.234,5 ton") == ["1.234,5"]
+    assert _NUMERAL.findall("2023, 2025.") == ["2023", "2025"]
+    assert _NUMERAL.findall("total 72074.8.") == ["72074.8"]

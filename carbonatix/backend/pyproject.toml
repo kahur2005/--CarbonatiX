@@ -9,6 +9,12 @@ dependencies = [
     "python-jose[cryptography]>=3.3",
     "asyncpg>=0.30",
     "httpx>=0.27",
+    # The advisor reaches its model (GPT-5.6 Sol, previously Claude Fable 5)
+    # through Elice ML API, an OpenAI-compatible gateway, so it uses the
+    # OpenAI SDK against a custom base URL. `anthropic` stays only for
+    # app/ingestion/vision.py, which is due to move to a separate
+    # document-vision provider.
+    "openai>=1.60",
     "anthropic>=0.40",
     "prophet>=1.1.6",
     "pandas>=2.2",
