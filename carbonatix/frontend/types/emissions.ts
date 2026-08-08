@@ -162,10 +162,9 @@ export interface Candidate {
 
 export interface DocumentExtractionResult {
   candidates: Candidate[];
-  /** Always `true` today: the vision model never self-reports a per-field
-   * confidence, so every candidate with a non-null value carries the same
-   * flat placeholder. Do not treat `confidence` as a real reliability
-   * signal while this is `true`. */
+  /** Still `true` today: `confidence` carries Helpy's real element score,
+   * not a per-field reliability signal. Do not treat it as field-level
+   * accuracy while this flag remains set. */
   confidenceIsPlaceholder: boolean;
 }
 

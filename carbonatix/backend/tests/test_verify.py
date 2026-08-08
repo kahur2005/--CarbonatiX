@@ -112,6 +112,37 @@ def test_transcribed_value_cannot_be_carved_from_a_larger_printed_number():
     assert verify.verified_value(reading, _doc(evidence)) == (None, 0.0)
 
 
+@pytest.mark.parametrize(
+    ("evidence", "raw_value", "expected"),
+    [
+        ("Substitusi biokokas | 15 | %", "15", 15.0),
+        ("Substitusi biokokas | 15% | ton", "15", 15.0),
+        ("Kokas fosil | 85% | biokokas 15%", "15", 15.0),
+    ],
+    ids=["separated-percent", "attached-percent", "attached-among-percent"],
+)
+def test_bare_raw_value_grounds_against_percent_suffixed_print(evidence, raw_value, expected):
+    doc = _doc(evidence)
+    reading = _Reading(basis="transcribed", evidence=evidence, raw_value=raw_value)
+    value, confidence = verify.verified_value(reading, doc)
+    assert value == pytest.approx(expected)
+    assert confidence == pytest.approx(0.9)
+
+
+def test_bare_raw_value_does_not_carve_from_a_larger_percent_suffixed_number():
+    evidence = "Substitusi biokokas | 115% | ton"
+    reading = _Reading(basis="transcribed", evidence=evidence, raw_value="15")
+    assert verify.verified_value(reading, _doc(evidence)) == (None, 0.0)
+
+
+def test_percent_suffixed_raw_value_still_grounds_verbatim():
+    evidence = "PLTU captive | 85% | MWh"
+    reading = _Reading(basis="transcribed", evidence=evidence, raw_value="85%")
+    value, confidence = verify.verified_value(reading, _doc(evidence))
+    assert value == pytest.approx(85.0)
+    assert confidence == pytest.approx(0.9)
+
+
 def test_derived_value_is_computed_by_python_not_taken_from_the_model():
     doc = _doc("Bijih basah | 10.000 | ton", "Bijih kering setara | 6.800 | ton")
     reading = _Reading(

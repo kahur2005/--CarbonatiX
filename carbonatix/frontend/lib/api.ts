@@ -190,7 +190,12 @@ export async function* streamRecommendation(
 
 /** Posts one document for OCR candidate extraction. Never writes to the
  * company profile or a run -- the caller decides, per candidate, whether
- * and how to use the returned values (see `components/twin/UploadDropzone.tsx`). */
+ * and how to use the returned values (see `components/twin/UploadDropzone.tsx`).
+ *
+ * Two AI stages run inside this single request (see the backend's
+ * `/documents`), so it legitimately takes longer than a typical API call.
+ * The abort below sits above the backend's combined Helpy/Sol budgets so a
+ * server-side 502 still surfaces before the browser gives up first. */
 export async function postDocument(
   file: File,
   profile: "site_spec" | "operational",
@@ -199,7 +204,7 @@ export async function postDocument(
   body.append("file", file);
   body.append("profile", profile);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 120_000);
+  const timer = setTimeout(() => controller.abort(), 180_000);
   try {
     const res = await fetch(`${BASE}/documents`, {
       method: "POST",
@@ -210,6 +215,6 @@ export async function postDocument(
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   } finally {
-    clearTimeout(timeout);
+    clearTimeout(timer);
   }
 }

@@ -58,9 +58,14 @@ def _contains_number_token(needle: str, haystack: str) -> bool:
     """Whether a complete Indonesian numeral token occurs in `haystack`."""
     if parse_id_number(needle) is None:
         return False
-    pattern = re.compile(
-        rf"(?<![\w.,%+-]){re.escape(needle)}(?![\w%]|[.,]\d)"
-    )
+    escaped = re.escape(needle)
+    if needle.endswith("%"):
+        suffix = r"(?![\w.,+-]|[.,]\d)"
+    else:
+        # A bare numeral may ground against an immediately attached percent sign,
+        # but must not be carved out of a longer number such as `115%`.
+        suffix = r"(?:%|)(?![\w%]|[.,]\d)"
+    pattern = re.compile(rf"(?<![\w.,%+-]){escaped}{suffix}")
     return pattern.search(haystack) is not None
 
 

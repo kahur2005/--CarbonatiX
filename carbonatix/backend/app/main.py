@@ -1,5 +1,6 @@
 """FastAPI application. Route registration only -- logic lives in modules."""
 
+from pathlib import Path
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile, status
@@ -31,6 +32,37 @@ from .schemas import (
 app = FastAPI(title="SmartSmelt ERP API", version="2.0")
 
 _MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+
+_SUPPORTED_MEDIA_TYPES = frozenset(
+    {
+        "application/pdf",
+        "application/vnd.ms-powerpoint",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "image/png",
+        "image/jpeg",
+        "image/jpg",
+    }
+)
+_EXTENSION_MEDIA_TYPES = {
+    ".pdf": "application/pdf",
+    ".ppt": "application/vnd.ms-powerpoint",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+}
+
+
+def _resolve_upload_media_type(content_type: str | None, filename: str) -> str:
+    declared = content_type.split(";")[0].strip().lower() if content_type else None
+    if declared in _SUPPORTED_MEDIA_TYPES:
+        return declared
+    ext = Path(filename).suffix.lower()
+    if ext in _EXTENSION_MEDIA_TYPES:
+        return _EXTENSION_MEDIA_TYPES[ext]
+    if declared:
+        return declared
+    return "application/pdf"
 
 app.add_middleware(
     CORSMiddleware,
@@ -143,6 +175,21 @@ async def post_document(
     """
     if profile not in ("site_spec", "operational"):
         raise HTTPException(status_code=422, detail="Unknown document profile")
+
+    if file.size is not None and file.size > _MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail="Dokumen terlalu besar. Maksimum 20 MB.",
+        )
+
+    filename = file.filename or "document"
+    media_type = _resolve_upload_media_type(file.content_type, filename)
+    if media_type not in _SUPPORTED_MEDIA_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Could not read the document. Enter the values manually.",
+        )
+
     file_bytes = await file.read(_MAX_UPLOAD_BYTES + 1)
     if len(file_bytes) > _MAX_UPLOAD_BYTES:
         raise HTTPException(
@@ -150,11 +197,7 @@ async def post_document(
             detail="Dokumen terlalu besar. Maksimum 20 MB.",
         )
     try:
-        parsed = await parse_document(
-            file_bytes,
-            file.content_type or "application/pdf",
-            file.filename or "document",
-        )
+        parsed = await parse_document(file_bytes, media_type, filename)
         readings = await interpret_fields(parsed, profile)
         candidates = readings_to_candidates(readings, parsed)
     except ExtractionFailed as exc:

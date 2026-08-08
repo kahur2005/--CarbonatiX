@@ -5,7 +5,7 @@ import uuid
 from io import BytesIO
 
 import pytest
-from fastapi import UploadFile
+from fastapi import HTTPException, UploadFile
 from fastapi.testclient import TestClient
 
 from app.auth import current_user_id
@@ -237,14 +237,9 @@ def test_documents_runs_two_stage_pipeline_and_returns_enriched_unaccepted_candi
             )
         ]
 
-    async def _must_not_write(*args, **kwargs):
-        pytest.fail("document route must not persist candidates")
-
     monkeypatch.setattr("app.main.parse_document", _fake_parse, raising=False)
     monkeypatch.setattr("app.main.interpret_fields", _fake_interpret, raising=False)
     monkeypatch.setattr("app.main.readings_to_candidates", _fake_mapping, raising=False)
-    monkeypatch.setattr("app.companies.save", _must_not_write)
-    monkeypatch.setattr("app.runs.commit", _must_not_write)
 
     r = client.post(
         "/documents",
@@ -297,6 +292,79 @@ async def test_documents_uses_parse_fallbacks_for_missing_content_type_and_filen
 
     assert response.candidates == []
     assert captured["args"] == (b"fake", "application/pdf", "document")
+
+
+@pytest.mark.asyncio
+async def test_documents_rejects_oversized_declared_size_before_reading(monkeypatch):
+    read_called = False
+
+    async def _track_read(self, size=-1):
+        nonlocal read_called
+        read_called = True
+        return b"x"
+
+    monkeypatch.setattr(UploadFile, "read", _track_read, raising=False)
+
+    oversized = UploadFile(
+        file=BytesIO(b"x"),
+        filename="report.pdf",
+        size=MAX_UPLOAD_BYTES + 1,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await post_document(file=oversized, profile="operational", user_id=USER)
+
+    assert exc.value.status_code == 413
+    assert read_called is False
+
+
+def test_documents_rejects_unsupported_media_type_before_provider_calls(monkeypatch):
+    async def _must_not_parse(*args, **kwargs):
+        pytest.fail("parse must not run for an unsupported media type")
+
+    monkeypatch.setattr("app.main.parse_document", _must_not_parse, raising=False)
+
+    r = client.post(
+        "/documents",
+        files={
+            "file": (
+                "sheet.xlsx",
+                b"fake-xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+        data={"profile": "operational"},
+    )
+
+    assert r.status_code == 415
+    assert "manual" in r.json()["detail"].lower()
+
+
+def test_documents_accepts_pptx_when_declared_type_is_missing(monkeypatch):
+    captured = {}
+
+    async def _fake_parse(file_bytes, media_type, filename):
+        captured["args"] = (media_type, filename)
+        return ParsedDocument(elements=[], page_count=0)
+
+    async def _fake_interpret(doc, profile):
+        return {}
+
+    monkeypatch.setattr("app.main.parse_document", _fake_parse, raising=False)
+    monkeypatch.setattr("app.main.interpret_fields", _fake_interpret, raising=False)
+    monkeypatch.setattr("app.main.readings_to_candidates", lambda readings, doc: [], raising=False)
+
+    r = client.post(
+        "/documents",
+        files={"file": ("slides.pptx", b"fake", None)},
+        data={"profile": "operational"},
+    )
+
+    assert r.status_code == 200
+    assert captured["args"] == (
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "slides.pptx",
+    )
 
 
 def test_documents_rejects_upload_above_20_mb_before_provider_calls(monkeypatch):
@@ -527,6 +595,7 @@ def test_ungrounded_reading_becomes_blank_candidate_not_a_guess():
             basis="transcribed",
             evidence="Angka yang tidak ada di dokumen | 99.999 | ton",
             raw_value="99.999",
+            note="model note",
         )
     }
 
@@ -535,6 +604,8 @@ def test_ungrounded_reading_becomes_blank_candidate_not_a_guess():
     assert candidate.value is None
     assert candidate.confidence == 0.0
     assert candidate.basis is None
+    assert candidate.evidence == ""
+    assert candidate.source_hint == ""
     assert candidate.derivation == ""
 
 

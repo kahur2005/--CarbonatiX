@@ -139,32 +139,32 @@ async def parse(
     base_url = base_url.rstrip("/")
 
     try:
-        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS) as client:
-            submit = await client.post(
-                f"{base_url}/v1/documents",
-                headers=headers,
-                files={"document": (filename, file_bytes, media_type)},
-                data={"configs": _CONFIGS},
-            )
-            submit.raise_for_status()
-            job_id = submit.json()["job_id"]
+        async with asyncio.timeout(_POLL_BUDGET_SECONDS):
+            async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS) as client:
+                submit = await client.post(
+                    f"{base_url}/v1/documents",
+                    headers=headers,
+                    files={"document": (filename, file_bytes, media_type)},
+                    data={"configs": _CONFIGS},
+                )
+                submit.raise_for_status()
+                job_id = submit.json()["job_id"]
 
-            deadline = asyncio.get_running_loop().time() + _POLL_BUDGET_SECONDS
-            while True:
-                poll = await client.get(f"{base_url}/v1/jobs/{job_id}", headers=headers)
-                poll.raise_for_status()
-                body = poll.json()
-                status = body.get("status")
-                if status == "succeeded":
-                    return _normalise(body["result"])
-                if status == "failure":
-                    raise ExtractionFailed(f"Helpy reported job {job_id} as failed")
-                if asyncio.get_running_loop().time() >= deadline:
-                    raise ExtractionFailed(
-                        f"Document parsing exceeded {_POLL_BUDGET_SECONDS:.0f}s"
-                    )
-                await asyncio.sleep(_POLL_INTERVAL_SECONDS)
+                while True:
+                    poll = await client.get(f"{base_url}/v1/jobs/{job_id}", headers=headers)
+                    poll.raise_for_status()
+                    body = poll.json()
+                    status = body.get("status")
+                    if status == "succeeded":
+                        return _normalise(body["result"])
+                    if status == "failure":
+                        raise ExtractionFailed(f"Helpy reported job {job_id} as failed")
+                    await asyncio.sleep(_POLL_INTERVAL_SECONDS)
+    except TimeoutError as exc:
+        raise ExtractionFailed(
+            f"Document parsing exceeded {_POLL_BUDGET_SECONDS:.0f}s"
+        ) from exc
     except ExtractionFailed:
         raise
-    except Exception as exc:
+    except Exception as exc:  # transport, JSON, and key errors alike
         raise ExtractionFailed(str(exc)) from exc

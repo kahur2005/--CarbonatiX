@@ -167,7 +167,7 @@ describe("postDocument timeout", () => {
     vi.unstubAllGlobals();
   });
 
-  it("passes an AbortSignal to fetch and aborts it after exactly 120 seconds", async () => {
+  it("passes an AbortSignal to fetch and aborts it after exactly 180 seconds", async () => {
     vi.useFakeTimers();
     let resolveFetch!: (response: {
       ok: boolean;
@@ -193,7 +193,7 @@ describe("postDocument timeout", () => {
     expect(init?.signal).toBeInstanceOf(AbortSignal);
     expect(init?.signal?.aborted).toBe(false);
 
-    await vi.advanceTimersByTimeAsync(119_999);
+    await vi.advanceTimersByTimeAsync(179_999);
     expect(init?.signal?.aborted).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     expect(init?.signal?.aborted).toBe(true);

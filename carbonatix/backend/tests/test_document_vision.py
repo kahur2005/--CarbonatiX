@@ -6,9 +6,11 @@ tests run against genuine provider output -- including a table where Helpy
 inferred a phantom `colspan` and emitted an empty cell in every row.
 """
 
+import asyncio
 import json
 from pathlib import Path
 
+import httpx
 import pytest
 
 from app.ingestion import document_vision
@@ -77,11 +79,17 @@ async def test_parse_raises_when_api_key_is_unset(monkeypatch):
 
 
 class _FakeResponse:
-    def __init__(self, payload: dict):
+    def __init__(self, payload: dict, *, status_error: bool = False):
         self._payload = payload
+        self._status_error = status_error
 
     def raise_for_status(self) -> None:
-        return None
+        if self._status_error:
+            raise httpx.HTTPStatusError(
+                "rejected",
+                request=httpx.Request("POST", "https://example.test/v1/documents"),
+                response=httpx.Response(400),
+            )
 
     def json(self) -> dict:
         return self._payload
@@ -149,14 +157,47 @@ async def test_job_failure_raises_rather_than_returning_an_empty_document(
 
 @pytest.mark.asyncio
 async def test_polling_is_bounded(monkeypatch, helpy_env):
-    """Without a deadline a stuck job holds a worker forever."""
-    monkeypatch.setattr(document_vision.asyncio, "sleep", _no_sleep)
-    monkeypatch.setattr(
-        document_vision.httpx,
-        "AsyncClient",
-        _fake_client([{"status": "running"}] * 500),
-    )
-    monkeypatch.setattr(document_vision, "_POLL_BUDGET_SECONDS", 0.0)
+    """Without a total async timeout a stuck job holds a worker forever."""
+
+    class _HangingClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, url, **kwargs):
+            return _FakeResponse({"job_id": "job-1", "status": "queued"})
+
+        async def get(self, url, **kwargs):
+            await asyncio.sleep(1000)
+
+    monkeypatch.setattr(document_vision.httpx, "AsyncClient", _HangingClient)
+    monkeypatch.setattr(document_vision, "_POLL_BUDGET_SECONDS", 0.01)
 
     with pytest.raises(document_vision.ExtractionFailed, match="exceeded"):
+        await document_vision.parse(b"pdf-bytes", "application/pdf")
+
+
+@pytest.mark.asyncio
+async def test_rejected_submit_is_normalized_to_extraction_failed(monkeypatch, helpy_env):
+    class _RejectingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, url, **kwargs):
+            return _FakeResponse({}, status_error=True)
+
+        async def get(self, url, **kwargs):
+            pytest.fail("poll must not run after submit rejection")
+
+    monkeypatch.setattr(document_vision.httpx, "AsyncClient", _RejectingClient)
+
+    with pytest.raises(document_vision.ExtractionFailed):
         await document_vision.parse(b"pdf-bytes", "application/pdf")

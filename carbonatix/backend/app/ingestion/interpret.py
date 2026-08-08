@@ -19,7 +19,10 @@ __all__ = ["FIELDS_BY_PROFILE", "FieldReading", "interpret"]
 
 _MODEL = "gpt-5.6-sol"
 _REASONING_EFFORT = "high"
+# Compact schema-constrained JSON only; truncation fails loudly rather than
+# returning partial fields. This is a cost ceiling, not a live-measured fit.
 _MAX_COMPLETION_TOKENS = 8000
+_TIMEOUT_SECONDS = 60.0
 
 
 @dataclass(frozen=True)
@@ -43,7 +46,8 @@ MEDAN YANG DICARI:
 Untuk SETIAP medan di atas, tentukan salah satu:
 1. "transcribed" — angkanya tercetak langsung di dokumen. Sertakan
    "evidence": baris teks PERSIS seperti muncul di dokumen di atas, dan
-   "raw_value": angkanya PERSIS seperti tercetak (contoh: "10.000", "1,8").
+   "raw_value": angkanya PERSIS seperti tercetak (contoh: "10.000", "1,8",
+   "15%", atau "15" bila satuan % terpisah).
 2. "derived" — angkanya tidak tercetak, tetapi dapat dihitung. Sertakan
    "operands": daftar angka PERSIS seperti tercetak di dokumen, dan
    "operation": salah satu dari "difference_over_total", "ratio",
@@ -112,7 +116,11 @@ async def interpret(doc: ParsedDocument, profile: str) -> dict[str, FieldReading
     )
 
     try:
-        async with AsyncOpenAI(api_key=api_key, base_url=base_url) as client:
+        async with AsyncOpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=_TIMEOUT_SECONDS,
+        ) as client:
             response = await client.chat.completions.create(
                 model=_MODEL,
                 messages=[{"role": "user", "content": prompt}],

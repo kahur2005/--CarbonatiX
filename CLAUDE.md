@@ -20,7 +20,7 @@ code, comments and docs are in English.
 Backend (`carbonatix/backend`, Python 3.11+, venv at `.venv`):
 
 ```bash
-.venv/Scripts/python.exe -m pytest -q              # full suite (277 tests, ~14s)
+.venv/Scripts/python.exe -m pytest -q              # full suite (286 tests, ~7s)
 .venv/Scripts/python.exe -m pytest tests/test_calculator_golden.py -q
 .venv/Scripts/python.exe -m pytest -k "biocoke" -q # single test by name
 .venv/Scripts/python.exe -m ruff check app tests
@@ -30,7 +30,7 @@ Backend (`carbonatix/backend`, Python 3.11+, venv at `.venv`):
 Frontend (`carbonatix/frontend`, Next.js 16.3):
 
 ```bash
-npx vitest run                          # full suite (115 tests)
+npx vitest run                          # full suite (118 tests)
 npx vitest run lib/units.test.ts        # single file
 npx vitest run -t "rejects out of range"
 npx tsc --noEmit                        # type check
@@ -44,8 +44,8 @@ time. `python ml/train_nickel.py`, `python ml/train_carbon.py`.
 
 Environment. The backend `.env.example` is a placeholder-only template; the frontend
 `.env.example` remains absent. Backend: `DATABASE_URL`, `SUPABASE_URL` (the JWKS URL is
-derived from it), `SUPABASE_SERVICE_ROLE_KEY`, and one `ELICE_API_KEY` shared by two
-model-specific deployments: `ELICE_BASE_URL` for GPT-5.6 Sol and required `HELPY_BASE_URL`
+derived from it), optional `SUPABASE_SERVICE_ROLE_KEY` (currently unused by the
+backend), and one `ELICE_API_KEY` shared by two model-specific deployments: `ELICE_BASE_URL` for GPT-5.6 Sol and required `HELPY_BASE_URL`
 for document vision. The two base URLs are not interchangeable. Frontend:
 `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, plus
 `E2E_EXISTING_USER_*` for Playwright. There is no `SUPABASE_JWT_SECRET` — see the auth
@@ -211,9 +211,11 @@ with the shared `ELICE_API_KEY` — there is no `HELPY_API_KEY`). It submits at
 normalized `ParsedDocument`, never Helpy's own JSON, so a provider swap cannot leak a response
 shape downstream. Helpy accepts PDF/PPT/PPTX/PNG/JPEG/JPG — **not XLSX**, despite PRD §10.
 
-**Stage 2 — `interpret.py`.** `gpt-5.6-sol` uses `ELICE_BASE_URL` with an 8,000-token
-completion cap. For every requested profile field it returns either verbatim `evidence` and
-the printed `raw_value`, or verbatim `operands` plus a named `operation`. It never returns a
+**Stage 2 — `interpret.py`.** `gpt-5.6-sol` uses `ELICE_BASE_URL` with a 60-second
+client timeout and an 8,000-token completion cap that is a schema-constrained JSON cost
+ceiling -- truncation fails loudly and live sufficiency is still unmeasured. For every
+requested profile field it returns either verbatim `evidence` and the printed
+`raw_value`, or verbatim `operands` plus a named `operation`. It never returns a
 computed value, and every requested field is represented so omission becomes "not found"
 rather than a missing key.
 

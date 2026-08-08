@@ -137,18 +137,19 @@ def readings_to_candidates(readings: dict, doc) -> list[Candidate]:
         if node is None:
             continue
         value, confidence = verified_value(reading, doc)
+        verified = value is not None
         out.append(
             Candidate(
                 field=name,
                 value=_normalise(name, value),
                 confidence=confidence,
                 node=node,
-                source_hint=reading.note,
-                basis=reading.basis if value is not None else None,
-                evidence=reading.evidence,
+                source_hint=reading.note if verified else "",
+                basis=reading.basis if verified else None,
+                evidence=reading.evidence if verified else "",
                 derivation=(
                     _derivation_text(reading)
-                    if value is not None and reading.basis == "derived"
+                    if verified and reading.basis == "derived"
                     else ""
                 ),
             )

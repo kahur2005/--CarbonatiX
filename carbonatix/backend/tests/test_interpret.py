@@ -130,6 +130,7 @@ async def test_prompt_defines_all_outcomes_and_forbids_invention_or_computation(
         "difference_over_total",
         "ratio",
         "percentage_of_total",
+        "15%",
         "JANGAN mengarang angka",
         "JANGAN menghitung hasil derivasi",
         '"fields"',
@@ -147,6 +148,7 @@ async def test_request_uses_exact_gateway_contract(monkeypatch, elice_env):
     assert captured.init == {
         "api_key": "test-key",
         "base_url": "https://gateway.example/uuid/v1",
+        "timeout": 60.0,
     }
     assert set(captured.kwargs) == {
         "model",

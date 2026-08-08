@@ -72,7 +72,11 @@ export default function UploadDropzone({ profile, fieldLabels, onAccept }: Uploa
       setHasResult(true);
     } catch (err) {
       if (generation !== requestGeneration.current) return;
-      setError(err instanceof Error ? err.message : "Gagal mengunggah dokumen.");
+      if (err instanceof DOMException && err.name === "AbortError") {
+        setError("Permintaan unggah habis waktu. Masukkan nilai secara manual.");
+      } else {
+        setError(err instanceof Error ? err.message : "Gagal mengunggah dokumen.");
+      }
     } finally {
       if (generation === requestGeneration.current) {
         setPending(false);
@@ -93,6 +97,9 @@ export default function UploadDropzone({ profile, fieldLabels, onAccept }: Uploa
   function handleDismiss(candidate: Candidate) {
     setStatuses((prev) => ({ ...prev, [candidate.field]: "dismissed" }));
   }
+
+  const allUnreadable =
+    candidates.length === 0 || candidates.every((candidate) => candidate.value === null);
 
   return (
     <div className="flex flex-col gap-3">
@@ -148,7 +155,7 @@ export default function UploadDropzone({ profile, fieldLabels, onAccept }: Uploa
         </p>
       )}
 
-      {hasResult && !pending && candidates.length === 0 && (
+      {hasResult && !pending && allUnreadable && (
         <p role="status" className="text-sm text-zinc-600 dark:text-zinc-400">
           Dokumen berhasil dibaca, tetapi tidak ada medan yang dicari ditemukan di dalamnya.
           Masukkan nilai secara manual.
@@ -159,9 +166,8 @@ export default function UploadDropzone({ profile, fieldLabels, onAccept }: Uploa
         <div className="flex flex-col gap-2 rounded-lg border border-black/[.08] p-3 dark:border-white/[.145]">
           {confidenceIsPlaceholder && (
             <p className="text-xs text-zinc-500 dark:text-zinc-400">
-              Tanda &ldquo;terbaca&rdquo; di bawah hanya menunjukkan bahwa model menemukan
-              sebuah nilai -- bukan seberapa yakin model terhadap nilai tersebut. Periksa tiap
-              nilai sebelum menerimanya.
+              Skor &ldquo;terbaca&rdquo; berasal dari kualitas elemen dokumen Helpy, bukan
+              keandalan per medan. Periksa tiap nilai sebelum menerimanya.
             </p>
           )}
           <ul className="flex flex-col gap-2">

@@ -180,6 +180,92 @@ describe("UploadDropzone", () => {
     expect(await screen.findByText(EMPTY_GUIDANCE)).toBeInTheDocument();
   });
 
+  it("shows manual-entry guidance when every candidate is unreadable", async () => {
+    vi.mocked(postDocument).mockResolvedValue({
+      candidates: [
+        {
+          field: "wet_ore_input_tons",
+          value: null,
+          confidence: 0,
+          node: "stockpile",
+          sourceHint: "",
+          basis: null,
+          evidence: "",
+          derivation: "",
+        },
+        {
+          field: "moisture_content_pct",
+          value: null,
+          confidence: 0,
+          node: "stockpile",
+          sourceHint: "",
+          basis: null,
+          evidence: "",
+          derivation: "",
+        },
+      ],
+      confidenceIsPlaceholder: true,
+    });
+    const { container } = render(
+      <UploadDropzone profile="operational" fieldLabels={FIELD_LABELS} onAccept={vi.fn()} />,
+    );
+
+    await uploadDummyFile(container);
+
+    expect(await screen.findByText(EMPTY_GUIDANCE)).toBeInTheDocument();
+    expect(screen.getAllByText("Tidak terbaca").length).toBeGreaterThan(0);
+  });
+
+  it("does not show empty guidance when at least one candidate is readable", async () => {
+    vi.mocked(postDocument).mockResolvedValue({
+      candidates: [
+        {
+          field: "wet_ore_input_tons",
+          value: null,
+          confidence: 0,
+          node: "stockpile",
+          sourceHint: "",
+          basis: null,
+          evidence: "",
+          derivation: "",
+        },
+        {
+          field: "moisture_content_pct",
+          value: 0.32,
+          confidence: 0.75,
+          node: "stockpile",
+          sourceHint: "",
+          basis: "transcribed",
+          evidence: "Kadar air 32%",
+          derivation: "",
+        },
+      ],
+      confidenceIsPlaceholder: true,
+    });
+    const { container } = render(
+      <UploadDropzone profile="operational" fieldLabels={FIELD_LABELS} onAccept={vi.fn()} />,
+    );
+
+    await uploadDummyFile(container);
+
+    expect(await screen.findByText("32 %")).toBeInTheDocument();
+    expect(screen.queryByText(EMPTY_GUIDANCE)).not.toBeInTheDocument();
+  });
+
+  it("renders Bahasa manual-entry guidance when the upload request times out", async () => {
+    const abortError = new DOMException("The operation was aborted.", "AbortError");
+    vi.mocked(postDocument).mockRejectedValue(abortError);
+    const { container } = render(
+      <UploadDropzone profile="operational" fieldLabels={FIELD_LABELS} onAccept={vi.fn()} />,
+    );
+
+    await uploadDummyFile(container);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Permintaan unggah habis waktu. Masukkan nilai secara manual.",
+    );
+  });
+
   it("does not show empty guidance while an upload is pending or after it fails", async () => {
     let rejectUpload!: (reason: Error) => void;
     vi.mocked(postDocument).mockImplementation(
