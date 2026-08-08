@@ -31,7 +31,7 @@ PERMITTED_OPERATIONS = frozenset(
     {"difference_over_total", "ratio", "percentage_of_total"}
 )
 
-_NUMBER = re.compile(r"-?\d[\d.,]*")
+_ID_NUMBER = re.compile(r"-?(?:\d{1,3}(?:\.\d{3})+|\d+)(?:,\d+)?%?")
 
 
 def parse_id_number(text: str) -> float | None:
@@ -43,35 +43,25 @@ def parse_id_number(text: str) -> float | None:
     """
     if not isinstance(text, str):
         return None
-    match = _NUMBER.search(text.strip())
-    if match is None:
+    token = text.strip()
+    if _ID_NUMBER.fullmatch(token) is None:
         return None
-    token = match.group().rstrip(".,")
-    if not token or not token.lstrip("-"):
-        return None
-
-    if "." in token and "," in token:
-        # Whichever separator sits last is the decimal mark.
-        if token.rindex(",") > token.rindex("."):
-            token = token.replace(".", "").replace(",", ".")
-        else:
-            token = token.replace(",", "")
-    elif "," in token:
-        token = token.replace(",", ".")
-    elif "." in token:
-        groups = token.lstrip("-").split(".")
-        # A trailing group of exactly three digits is a thousands grouping,
-        # which is the only reading that makes "10.000" ten thousand.
-        if len(groups) > 1 and all(len(g) == 3 for g in groups[1:]):
-            token = token.replace(".", "")
-
-    if token.count(".") > 1:
-        return None
+    token = token.removesuffix("%").replace(".", "").replace(",", ".")
     try:
         value = float(token)
     except ValueError:
         return None
     return value if math.isfinite(value) else None
+
+
+def _contains_number_token(needle: str, haystack: str) -> bool:
+    """Whether a complete Indonesian numeral token occurs in `haystack`."""
+    if parse_id_number(needle) is None:
+        return False
+    pattern = re.compile(
+        rf"(?<![\w.,%+-]){re.escape(needle)}(?![\w%]|[.,]\d)"
+    )
+    return pattern.search(haystack) is not None
 
 
 def _compute(operation: str, values: list[float]) -> float | None:
@@ -103,7 +93,9 @@ def verified_value(reading: Any, doc: Any) -> tuple[float | None, float]:
     if reading.basis == "transcribed":
         if not reading.evidence or reading.evidence not in text:
             return None, 0.0
-        if not reading.raw_value or reading.raw_value not in reading.evidence:
+        if not reading.raw_value or not _contains_number_token(
+            reading.raw_value, reading.evidence
+        ):
             return None, 0.0
         value = parse_id_number(reading.raw_value)
         if value is None:
@@ -115,7 +107,7 @@ def verified_value(reading: Any, doc: Any) -> tuple[float | None, float]:
             return None, 0.0
         values: list[float] = []
         for operand in reading.operands:
-            if operand not in text:
+            if not _contains_number_token(operand, text):
                 return None, 0.0
             parsed = parse_id_number(operand)
             if parsed is None:
@@ -124,7 +116,7 @@ def verified_value(reading: Any, doc: Any) -> tuple[float | None, float]:
         result = _compute(reading.operation, values)
         if result is None:
             return None, 0.0
-        return result, min(_score_for(o, doc) for o in reading.operands)
+        return result, min(_score_for_number(o, doc) for o in reading.operands)
 
     return None, 0.0
 
@@ -138,5 +130,12 @@ def _score_for(needle: str, doc: Any) -> float:
     """
     for element in doc.elements:
         if needle in element.text:
-            return element.score
+            return element.score if math.isfinite(element.score) else 0.0
+    return 0.0
+
+
+def _score_for_number(needle: str, doc: Any) -> float:
+    for element in doc.elements:
+        if _contains_number_token(needle, element.text):
+            return element.score if math.isfinite(element.score) else 0.0
     return 0.0

@@ -65,6 +65,11 @@ def test_unparseable_text_is_none_not_a_guess(garbage):
     assert verify.parse_id_number(garbage) is None
 
 
+@pytest.mark.parametrize("malformed", ["12.34", "1,234.56", "abc123xyz"])
+def test_malformed_or_non_indonesian_numbers_are_rejected(malformed):
+    assert verify.parse_id_number(malformed) is None
+
+
 def test_transcribed_value_grounded_in_the_document_is_accepted():
     doc = _doc("Bijih basah diterima (as-received) | 10.000 | ton")
     reading = _Reading(
@@ -101,6 +106,12 @@ def test_transcribed_value_not_present_inside_its_own_evidence_is_rejected():
     assert verify.verified_value(reading, doc)[0] is None
 
 
+def test_transcribed_value_cannot_be_carved_from_a_larger_printed_number():
+    evidence = "Bijih basah diterima | 10.000 | ton"
+    reading = _Reading(basis="transcribed", evidence=evidence, raw_value="1")
+    assert verify.verified_value(reading, _doc(evidence)) == (None, 0.0)
+
+
 def test_derived_value_is_computed_by_python_not_taken_from_the_model():
     doc = _doc("Bijih basah | 10.000 | ton", "Bijih kering setara | 6.800 | ton")
     reading = _Reading(
@@ -123,6 +134,16 @@ def test_derived_operand_absent_from_the_document_is_rejected():
         operation="difference_over_total",
     )
     assert verify.verified_value(reading, doc)[0] is None
+
+
+def test_derived_operand_cannot_be_carved_from_a_larger_printed_number():
+    doc = _doc("Bijih basah | 10.000 | ton")
+    reading = _Reading(
+        basis="derived",
+        operands=["1", "10.000"],
+        operation="ratio",
+    )
+    assert verify.verified_value(reading, doc) == (None, 0.0)
 
 
 def test_unknown_operation_is_rejected_rather_than_evaluated():
@@ -156,3 +177,22 @@ def test_non_finite_results_are_rejected():
     reading = _Reading(basis="derived", operands=["1", "0"], operation="ratio")
     value = verify.verified_value(reading, doc)[0]
     assert value is None or math.isfinite(value)
+
+
+@pytest.mark.parametrize("score", [math.nan, math.inf, -math.inf])
+def test_non_finite_element_confidence_fails_safe_to_zero(score):
+    evidence = "Kadar air umpan | 85 | %"
+    doc = ParsedDocument(
+        elements=[
+            Element(
+                label="text",
+                text=evidence,
+                table_rows=None,
+                score=score,
+                page=0,
+            )
+        ],
+        page_count=1,
+    )
+    reading = _Reading(basis="transcribed", evidence=evidence, raw_value="85")
+    assert verify.verified_value(reading, doc) == (85.0, 0.0)
