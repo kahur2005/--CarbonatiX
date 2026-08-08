@@ -164,20 +164,23 @@ class CandidateResponse(_Camel):
     confidence: float
     node: str
     source_hint: str = ""
+    # "derived" values were computed from other printed figures. The UI
+    # must distinguish them from values transcribed directly.
+    basis: str | None = None
+    evidence: str = ""
+    derivation: str = ""
 
 
 class DocumentExtractionResponse(_Camel):
     """Response to POST /documents.
 
-    `confidence_is_placeholder` is always `True` today: the vision model
-    is never asked to self-report a per-field confidence, so every
-    candidate with a non-null value carries the same flat default
-    (`mapping.to_candidates`'s 0.75) regardless of how cleanly it was
-    actually read. This flag exists so a frontend cannot mistake that
-    constant for a real per-field reliability signal -- `confidence`
-    currently means only "the model returned something" vs "it did not",
-    not "the model was sure." Flip this to `False` only once confidence is
-    genuinely model-derived.
+    `confidence_is_placeholder` is still `True`, for a different reason than
+    it used to be. `confidence` is no longer a flat 0.75 -- it now carries
+    the real score Helpy assigned to the document element the figure came
+    from. But that score is per ELEMENT, not per field: a table scoring 0.96
+    says the table was read cleanly, not that this particular cell was. So
+    it remains an indicator of document quality rather than a per-field
+    reliability signal, and this flag stays set to say so.
     """
 
     candidates: list[CandidateResponse]

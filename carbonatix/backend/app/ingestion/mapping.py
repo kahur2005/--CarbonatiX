@@ -10,7 +10,14 @@ package that writes a candidate into a company profile or a run.
 import math
 from dataclasses import dataclass
 
-__all__ = ["FIELDS_BY_PROFILE", "NODE_FOR_FIELD", "Candidate", "sanitize_leaf", "to_candidates"]
+__all__ = [
+    "FIELDS_BY_PROFILE",
+    "NODE_FOR_FIELD",
+    "Candidate",
+    "readings_to_candidates",
+    "sanitize_leaf",
+    "to_candidates",
+]
 
 # Every one of the nine inputs belongs to exactly one process stage in the
 # 3D digital twin (PRD 13.1). The twin is the input interface: clicking a
@@ -71,6 +78,12 @@ class Candidate:
     Deliberately has no `accepted` field: acceptance is a user action that
     happens elsewhere (the twin-node panel), never a state this object can
     carry or flip itself.
+
+    `basis` records HOW the value was obtained. A derived value was computed
+    from figures elsewhere in the document rather than read off it, and the
+    UI must show that difference -- the same rule the forecasts and the
+    advisory citations follow: provisional data carries its label all the
+    way to the rendered pixel.
     """
 
     field: str
@@ -78,6 +91,9 @@ class Candidate:
     confidence: float
     node: str
     source_hint: str = ""
+    basis: str | None = None
+    evidence: str = ""
+    derivation: str = ""
 
 
 def sanitize_leaf(value: object) -> float | None:
@@ -157,6 +173,52 @@ def to_candidates(
                 confidence=0.0 if value is None else confidences.get(field, 0.75),
                 node=node,
                 source_hint=hints.get(field, ""),
+            )
+        )
+    return out
+
+
+_OPERATION_TEMPLATES = {
+    "difference_over_total": "({a} − {b}) / {a}",
+    "ratio": "{a} / {b}",
+    "percentage_of_total": "({a} / {b}) × 100",
+}
+
+
+def _derivation_text(reading) -> str:
+    """Render a two-operand derivation for display beside its value."""
+    template = _OPERATION_TEMPLATES.get(reading.operation)
+    if template is None or len(reading.operands) != 2:
+        return ""
+    return template.format(a=reading.operands[0], b=reading.operands[1])
+
+
+def readings_to_candidates(readings: dict, doc) -> list[Candidate]:
+    """Convert verified stage-2 readings into user-review candidates.
+
+    Verification runs before candidate construction. An ungrounded figure
+    becomes a blank candidate for manual entry rather than a guessed value.
+    The import stays local because `interpret` imports this module's profile
+    field map.
+    """
+    from .verify import verified_value
+
+    out: list[Candidate] = []
+    for name, reading in readings.items():
+        node = NODE_FOR_FIELD.get(name)
+        if node is None:
+            continue
+        value, confidence = verified_value(reading, doc)
+        out.append(
+            Candidate(
+                field=name,
+                value=_normalise(name, value),
+                confidence=confidence,
+                node=node,
+                source_hint=reading.note,
+                basis=reading.basis if value is not None else None,
+                evidence=reading.evidence,
+                derivation=_derivation_text(reading) if value is not None else "",
             )
         )
     return out

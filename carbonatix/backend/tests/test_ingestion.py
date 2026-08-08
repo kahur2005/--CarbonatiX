@@ -15,8 +15,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.auth import current_user_id
-from app.ingestion.mapping import NODE_FOR_FIELD, to_candidates
+from app.ingestion.document_vision import Element, ParsedDocument
+from app.ingestion.interpret import FieldReading
+from app.ingestion.mapping import NODE_FOR_FIELD, readings_to_candidates, to_candidates
 from app.main import app
+from app.schemas import CandidateResponse, DocumentExtractionResponse
 
 USER = uuid.uuid4()
 client = TestClient(app)
@@ -516,3 +519,251 @@ def test_documents_survives_hostile_leaf_value_from_extract(monkeypatch, hostile
     clean = next(c for c in body["candidates"] if c["field"] == "wet_ore_input_tons")
     assert clean["value"] == 10000.0
     assert clean["confidence"] == 0.75
+
+
+# --- readings -> candidates (two-stage pipeline) -------------------------
+
+
+def _twostage_doc(*, first_score: float = 0.96, second_score: float = 0.82) -> ParsedDocument:
+    return ParsedDocument(
+        elements=[
+            Element(
+                label="table",
+                text="Bijih basah | 10.000 | ton",
+                table_rows=None,
+                score=first_score,
+                page=0,
+            ),
+            Element(
+                label="table",
+                text="Bijih kering setara | 6.800 | ton",
+                table_rows=None,
+                score=second_score,
+                page=0,
+            ),
+        ],
+        page_count=1,
+    )
+
+
+def test_transcribed_reading_becomes_candidate_with_element_score_node_and_evidence():
+    readings = {
+        "wet_ore_input_tons": FieldReading(
+            basis="transcribed",
+            evidence="Bijih basah | 10.000 | ton",
+            raw_value="10.000",
+        )
+    }
+
+    [candidate] = readings_to_candidates(readings, _twostage_doc())
+
+    assert candidate.value == 10000.0
+    assert candidate.confidence == pytest.approx(0.96)
+    assert candidate.node == "stockpile"
+    assert candidate.basis == "transcribed"
+    assert candidate.evidence == "Bijih basah | 10.000 | ton"
+    assert candidate.derivation == ""
+
+
+def test_derived_reading_carries_python_result_minimum_score_and_exact_derivation():
+    readings = {
+        "moisture_content_pct": FieldReading(
+            basis="derived",
+            evidence="Kadar air dihitung dari bijih basah dan kering",
+            operands=["10.000", "6.800"],
+            operation="difference_over_total",
+            note="kadar air dari selisih basah dan kering",
+        )
+    }
+
+    [candidate] = readings_to_candidates(readings, _twostage_doc())
+
+    assert candidate.value == pytest.approx(0.32)
+    assert candidate.confidence == pytest.approx(0.82)
+    assert candidate.basis == "derived"
+    assert candidate.evidence == "Kadar air dihitung dari bijih basah dan kering"
+    assert candidate.source_hint == "kadar air dari selisih basah dan kering"
+    assert candidate.derivation == "(10.000 − 6.800) / 10.000"
+
+
+@pytest.mark.parametrize(
+    ("operation", "expected"),
+    [
+        pytest.param("ratio", "10.000 / 6.800", id="ratio"),
+        pytest.param(
+            "percentage_of_total",
+            "(10.000 / 6.800) × 100",
+            id="percentage-of-total",
+        ),
+    ],
+)
+def test_derived_reading_uses_exact_derivation_template(operation, expected):
+    readings = {
+        "wet_ore_input_tons": FieldReading(
+            basis="derived",
+            operands=["10.000", "6.800"],
+            operation=operation,
+        )
+    }
+
+    [candidate] = readings_to_candidates(readings, _twostage_doc())
+
+    assert candidate.derivation == expected
+
+
+@pytest.mark.parametrize(
+    "reading",
+    [
+        pytest.param(
+            FieldReading(
+                basis="derived",
+                operands=["10.000", "6.800"],
+                operation="unknown_operation",
+            ),
+            id="unknown-operation",
+        ),
+        pytest.param(
+            FieldReading(
+                basis="derived",
+                operands=["10.000"],
+                operation="ratio",
+            ),
+            id="wrong-operand-count",
+        ),
+    ],
+)
+def test_invalid_derivation_has_no_rendered_derivation(reading):
+    [candidate] = readings_to_candidates(
+        {"wet_ore_input_tons": reading},
+        _twostage_doc(),
+    )
+
+    assert candidate.value is None
+    assert candidate.derivation == ""
+
+
+def test_ungrounded_reading_becomes_blank_candidate_not_a_guess():
+    readings = {
+        "wet_ore_input_tons": FieldReading(
+            basis="transcribed",
+            evidence="Angka yang tidak ada di dokumen | 99.999 | ton",
+            raw_value="99.999",
+        )
+    }
+
+    [candidate] = readings_to_candidates(readings, _twostage_doc())
+
+    assert candidate.value is None
+    assert candidate.confidence == 0.0
+    assert candidate.basis is None
+    assert candidate.derivation == ""
+
+
+def test_readings_candidate_has_no_accepted_member():
+    readings = {
+        "wet_ore_input_tons": FieldReading(
+            basis="transcribed",
+            evidence="Bijih basah | 10.000 | ton",
+            raw_value="10.000",
+        )
+    }
+
+    [candidate] = readings_to_candidates(readings, _twostage_doc())
+
+    assert not hasattr(candidate, "accepted")
+
+
+@pytest.mark.parametrize(
+    ("printed_value", "expected"),
+    [
+        pytest.param("15", 0.15, id="percentage-normalised"),
+        pytest.param("1", 1.0, id="one-unchanged"),
+        pytest.param("0,32", 0.32, id="below-one-unchanged"),
+    ],
+)
+def test_readings_percentage_normalisation_preserves_boundary(printed_value, expected):
+    evidence = f"Substitusi biokokas | {printed_value} | %"
+    doc = ParsedDocument(
+        elements=[
+            Element(
+                label="table",
+                text=evidence,
+                table_rows=None,
+                score=0.9,
+                page=0,
+            )
+        ],
+        page_count=1,
+    )
+    readings = {
+        "reductant_biocoke_pct": FieldReading(
+            basis="transcribed",
+            evidence=evidence,
+            raw_value=printed_value,
+        )
+    }
+
+    [candidate] = readings_to_candidates(readings, doc)
+
+    assert candidate.value == pytest.approx(expected)
+
+
+def test_readings_unknown_field_is_dropped():
+    readings = {
+        "totally_unknown_field": FieldReading(
+            basis="transcribed",
+            evidence="Bijih basah | 10.000 | ton",
+            raw_value="10.000",
+        )
+    }
+
+    assert readings_to_candidates(readings, _twostage_doc()) == []
+
+
+def test_non_finite_helpy_score_maps_to_fail_safe_zero_confidence():
+    readings = {
+        "wet_ore_input_tons": FieldReading(
+            basis="transcribed",
+            evidence="Bijih basah | 10.000 | ton",
+            raw_value="10.000",
+        )
+    }
+
+    [candidate] = readings_to_candidates(
+        readings,
+        _twostage_doc(first_score=float("nan")),
+    )
+
+    assert candidate.value == 10000.0
+    assert candidate.confidence == 0.0
+
+
+def test_candidate_response_serialises_new_members_with_camel_case_aliases():
+    response = CandidateResponse(
+        field="wet_ore_input_tons",
+        value=10000.0,
+        confidence=0.96,
+        node="stockpile",
+        source_hint="tercetak",
+        basis="transcribed",
+        evidence="Bijih basah | 10.000 | ton",
+        derivation="",
+    )
+
+    assert response.model_dump(by_alias=True) == {
+        "field": "wet_ore_input_tons",
+        "value": 10000.0,
+        "confidence": 0.96,
+        "node": "stockpile",
+        "sourceHint": "tercetak",
+        "basis": "transcribed",
+        "evidence": "Bijih basah | 10.000 | ton",
+        "derivation": "",
+    }
+    assert "accepted" not in response.model_dump(by_alias=True)
+
+
+def test_document_extraction_confidence_remains_conservatively_placeholder():
+    response = DocumentExtractionResponse(candidates=[])
+
+    assert response.model_dump(by_alias=True)["confidenceIsPlaceholder"] is True
