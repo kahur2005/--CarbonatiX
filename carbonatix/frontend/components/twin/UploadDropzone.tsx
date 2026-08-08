@@ -46,6 +46,7 @@ type CandidateStatus = "pending" | "accepted" | "dismissed";
  */
 export default function UploadDropzone({ profile, fieldLabels, onAccept }: UploadDropzoneProps) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const requestGeneration = useRef(0);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
@@ -57,6 +58,7 @@ export default function UploadDropzone({ profile, fieldLabels, onAccept }: Uploa
   async function handleFiles(files: FileList | null) {
     const file = files?.[0];
     if (!file) return;
+    const generation = ++requestGeneration.current;
     setPending(true);
     setError(null);
     setCandidates([]);
@@ -64,14 +66,18 @@ export default function UploadDropzone({ profile, fieldLabels, onAccept }: Uploa
     setStatuses({});
     try {
       const result = await postDocument(file, profile);
+      if (generation !== requestGeneration.current) return;
       setCandidates(result.candidates);
       setConfidenceIsPlaceholder(result.confidenceIsPlaceholder);
       setHasResult(true);
     } catch (err) {
+      if (generation !== requestGeneration.current) return;
       setError(err instanceof Error ? err.message : "Gagal mengunggah dokumen.");
     } finally {
-      setPending(false);
-      if (inputRef.current) inputRef.current.value = "";
+      if (generation === requestGeneration.current) {
+        setPending(false);
+        if (inputRef.current) inputRef.current.value = "";
+      }
     }
   }
 

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import UploadDropzone, { type FieldMeta } from "./UploadDropzone";
 import { postDocument } from "@/lib/api";
@@ -26,9 +26,9 @@ const FIELD_LABELS: Record<string, FieldMeta> = {
 /** Scoped to `container` (the render's own root), not the global
  * `document` -- an unscoped query can match another test's DOM if cleanup
  * ever regresses, silently uploading to the wrong component instance. */
-async function uploadDummyFile(container: HTMLElement) {
+async function uploadDummyFile(container: HTMLElement, name = "doc.png") {
   const user = userEvent.setup();
-  const file = new File(["dummy"], "doc.png", { type: "image/png" });
+  const file = new File(["dummy"], name, { type: "image/png" });
   const input = container.querySelector('input[type="file"]');
   if (!(input instanceof HTMLInputElement)) throw new Error("file input not found");
   await user.upload(input, file);
@@ -224,5 +224,59 @@ describe("UploadDropzone", () => {
 
     resolveSecond({ candidates: [], confidenceIsPlaceholder: true });
     expect(await screen.findByText(EMPTY_GUIDANCE)).toBeInTheDocument();
+  });
+
+  it("ignores an earlier upload that resolves while a newer upload remains pending", async () => {
+    let resolveFirst!: (result: DocumentExtractionResult) => void;
+    let resolveSecond!: (result: DocumentExtractionResult) => void;
+    vi.mocked(postDocument)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSecond = resolve;
+          }),
+      );
+    const { container } = render(
+      <UploadDropzone profile="operational" fieldLabels={FIELD_LABELS} onAccept={vi.fn()} />,
+    );
+
+    await uploadDummyFile(container, "upload-a.png");
+    await uploadDummyFile(container, "upload-b.png");
+    expect(screen.getByText("Membaca dokumen...")).toBeInTheDocument();
+
+    await act(async () => {
+      resolveFirst({ candidates: [], confidenceIsPlaceholder: true });
+    });
+
+    expect(screen.getByText("Membaca dokumen...")).toBeInTheDocument();
+    expect(screen.queryByText(EMPTY_GUIDANCE)).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveSecond({
+        candidates: [
+          {
+            field: "moisture_content_pct",
+            value: 0.4,
+            confidence: 0.75,
+            node: "stockpile",
+            sourceHint: "Upload B",
+            basis: "transcribed",
+            evidence: "Kadar air 40%",
+            derivation: "",
+          },
+        ],
+        confidenceIsPlaceholder: true,
+      });
+    });
+
+    expect(screen.queryByText("Membaca dokumen...")).not.toBeInTheDocument();
+    expect(screen.getByText("40 %")).toBeInTheDocument();
+    expect(screen.queryByText(EMPTY_GUIDANCE)).not.toBeInTheDocument();
   });
 });
