@@ -5,6 +5,9 @@ import UploadDropzone, { type FieldMeta } from "./UploadDropzone";
 import { postDocument } from "@/lib/api";
 import type { DocumentExtractionResult } from "@/types/emissions";
 
+const EMPTY_GUIDANCE =
+  "Dokumen berhasil dibaca, tetapi tidak ada medan yang dicari ditemukan di dalamnya. Masukkan nilai secara manual.";
+
 // `UploadDropzone` is shared between onboarding (Task 16) and every one of
 // the twin's five node panels (Task 17); it implements the one rule that
 // matters most in the whole ingestion pipeline -- "a candidate never
@@ -40,7 +43,16 @@ describe("UploadDropzone", () => {
   it('an unreadable candidate (value === null) renders "Tidak terbaca" and offers no accept control', async () => {
     const result: DocumentExtractionResult = {
       candidates: [
-        { field: "wet_ore_input_tons", value: null, confidence: 0, node: "stockpile", sourceHint: "" },
+        {
+          field: "wet_ore_input_tons",
+          value: null,
+          confidence: 0,
+          node: "stockpile",
+          sourceHint: "",
+          basis: null,
+          evidence: "",
+          derivation: "",
+        },
       ],
       confidenceIsPlaceholder: true,
     };
@@ -69,6 +81,9 @@ describe("UploadDropzone", () => {
           confidence: 0.75,
           node: "stockpile",
           sourceHint: "",
+          basis: "transcribed",
+          evidence: "Kadar air 32%",
+          derivation: "",
         },
       ],
       confidenceIsPlaceholder: true,
@@ -96,5 +111,118 @@ describe("UploadDropzone", () => {
     expect(screen.queryByRole("button", { name: "Terima" })).not.toBeInTheDocument();
     expect(screen.getByText("Diterima")).toBeInTheDocument();
     expect(onAccept).toHaveBeenCalledTimes(1);
+  });
+
+  it('labels a derived candidate with "Dihitung, bukan dibaca" and shows its exact derivation', async () => {
+    vi.mocked(postDocument).mockResolvedValue({
+      candidates: [
+        {
+          field: "wet_ore_input_tons",
+          value: 1250,
+          confidence: 0.75,
+          node: "stockpile",
+          sourceHint: "Ringkasan produksi",
+          basis: "derived",
+          evidence: "50 ton/jam selama 25 jam",
+          derivation: "50 ton/jam × 25 jam = 1.250 ton",
+        },
+      ],
+      confidenceIsPlaceholder: true,
+    });
+    const { container } = render(
+      <UploadDropzone profile="operational" fieldLabels={FIELD_LABELS} onAccept={vi.fn()} />,
+    );
+
+    await uploadDummyFile(container);
+
+    expect(await screen.findByText("Dihitung, bukan dibaca")).toBeInTheDocument();
+    expect(screen.getByText("50 ton/jam × 25 jam = 1.250 ton")).toBeInTheDocument();
+  });
+
+  it("does not label a transcribed candidate as derived or show a derivation", async () => {
+    vi.mocked(postDocument).mockResolvedValue({
+      candidates: [
+        {
+          field: "wet_ore_input_tons",
+          value: 1250,
+          confidence: 0.75,
+          node: "stockpile",
+          sourceHint: "Tabel penerimaan",
+          basis: "transcribed",
+          evidence: "Bijih basah masuk: 1.250 ton",
+          derivation: "",
+        },
+      ],
+      confidenceIsPlaceholder: true,
+    });
+    const { container } = render(
+      <UploadDropzone profile="operational" fieldLabels={FIELD_LABELS} onAccept={vi.fn()} />,
+    );
+
+    await uploadDummyFile(container);
+
+    expect(await screen.findByText("1250 ton")).toBeInTheDocument();
+    expect(screen.queryByText("Dihitung, bukan dibaca")).not.toBeInTheDocument();
+  });
+
+  it("shows manual-entry guidance after a successful response with no candidates", async () => {
+    vi.mocked(postDocument).mockResolvedValue({
+      candidates: [],
+      confidenceIsPlaceholder: true,
+    });
+    const { container } = render(
+      <UploadDropzone profile="operational" fieldLabels={FIELD_LABELS} onAccept={vi.fn()} />,
+    );
+
+    expect(screen.queryByText(EMPTY_GUIDANCE)).not.toBeInTheDocument();
+    await uploadDummyFile(container);
+
+    expect(await screen.findByText(EMPTY_GUIDANCE)).toBeInTheDocument();
+  });
+
+  it("does not show empty guidance while an upload is pending or after it fails", async () => {
+    let rejectUpload!: (reason: Error) => void;
+    vi.mocked(postDocument).mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectUpload = reject;
+        }),
+    );
+    const { container } = render(
+      <UploadDropzone profile="operational" fieldLabels={FIELD_LABELS} onAccept={vi.fn()} />,
+    );
+
+    await uploadDummyFile(container);
+    expect(await screen.findByText("Membaca dokumen...")).toBeInTheDocument();
+    expect(screen.queryByText(EMPTY_GUIDANCE)).not.toBeInTheDocument();
+
+    rejectUpload(new Error("Dokumen gagal dibaca."));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Dokumen gagal dibaca.");
+    expect(screen.queryByText(EMPTY_GUIDANCE)).not.toBeInTheDocument();
+  });
+
+  it("clears a prior successful-empty state when a second upload starts", async () => {
+    let resolveSecond!: (result: DocumentExtractionResult) => void;
+    vi.mocked(postDocument)
+      .mockResolvedValueOnce({ candidates: [], confidenceIsPlaceholder: true })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSecond = resolve;
+          }),
+      );
+    const { container } = render(
+      <UploadDropzone profile="operational" fieldLabels={FIELD_LABELS} onAccept={vi.fn()} />,
+    );
+
+    await uploadDummyFile(container);
+    expect(await screen.findByText(EMPTY_GUIDANCE)).toBeInTheDocument();
+
+    await uploadDummyFile(container);
+    expect(await screen.findByText("Membaca dokumen...")).toBeInTheDocument();
+    expect(screen.queryByText(EMPTY_GUIDANCE)).not.toBeInTheDocument();
+
+    resolveSecond({ candidates: [], confidenceIsPlaceholder: true });
+    expect(await screen.findByText(EMPTY_GUIDANCE)).toBeInTheDocument();
   });
 });

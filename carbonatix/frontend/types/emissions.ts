@@ -155,6 +155,9 @@ export interface Candidate {
   confidence: number;
   node: string;
   sourceHint: string;
+  basis: "transcribed" | "derived" | null;
+  evidence: string;
+  derivation: string;
 }
 
 export interface DocumentExtractionResult {

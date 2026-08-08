@@ -49,6 +49,7 @@ export default function UploadDropzone({ profile, fieldLabels, onAccept }: Uploa
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [hasResult, setHasResult] = useState(false);
   const [confidenceIsPlaceholder, setConfidenceIsPlaceholder] = useState(true);
   const [statuses, setStatuses] = useState<Record<string, CandidateStatus>>({});
   const [dragOver, setDragOver] = useState(false);
@@ -59,11 +60,13 @@ export default function UploadDropzone({ profile, fieldLabels, onAccept }: Uploa
     setPending(true);
     setError(null);
     setCandidates([]);
+    setHasResult(false);
     setStatuses({});
     try {
       const result = await postDocument(file, profile);
       setCandidates(result.candidates);
       setConfidenceIsPlaceholder(result.confidenceIsPlaceholder);
+      setHasResult(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Gagal mengunggah dokumen.");
     } finally {
@@ -139,6 +142,13 @@ export default function UploadDropzone({ profile, fieldLabels, onAccept }: Uploa
         </p>
       )}
 
+      {hasResult && !pending && candidates.length === 0 && (
+        <p role="status" className="text-sm text-zinc-600 dark:text-zinc-400">
+          Dokumen berhasil dibaca, tetapi tidak ada medan yang dicari ditemukan di dalamnya.
+          Masukkan nilai secara manual.
+        </p>
+      )}
+
       {candidates.length > 0 && (
         <div className="flex flex-col gap-2 rounded-lg border border-black/[.08] p-3 dark:border-white/[.145]">
           {confidenceIsPlaceholder && (
@@ -163,7 +173,7 @@ export default function UploadDropzone({ profile, fieldLabels, onAccept }: Uploa
                   key={candidate.field}
                   className="flex flex-wrap items-center justify-between gap-2 rounded border border-black/[.08] px-3 py-2 text-sm dark:border-white/[.145]"
                 >
-                  <div className="flex flex-col">
+                  <div className="flex min-w-0 flex-col">
                     <span className="font-medium text-black dark:text-zinc-50">
                       {meta?.label ?? candidate.field}
                     </span>
@@ -172,6 +182,16 @@ export default function UploadDropzone({ profile, fieldLabels, onAccept }: Uploa
                         ? "Tidak terbaca"
                         : `${displayValue}${meta?.unit ? ` ${meta.unit}` : ""}`}
                     </span>
+                    {candidate.basis === "derived" && (
+                      <span className="mt-1 w-fit rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900 dark:bg-amber-900/40 dark:text-amber-200">
+                        Dihitung, bukan dibaca
+                      </span>
+                    )}
+                    {candidate.derivation && (
+                      <span className="mt-1 break-words font-mono text-xs text-zinc-500 dark:text-zinc-400">
+                        {candidate.derivation}
+                      </span>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-2">

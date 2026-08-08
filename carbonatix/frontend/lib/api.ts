@@ -198,11 +198,18 @@ export async function postDocument(
   const body = new FormData();
   body.append("file", file);
   body.append("profile", profile);
-  const res = await fetch(`${BASE}/documents`, {
-    method: "POST",
-    headers: await authHeaderOnly(),
-    body,
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120_000);
+  try {
+    const res = await fetch(`${BASE}/documents`, {
+      method: "POST",
+      headers: await authHeaderOnly(),
+      body,
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  } finally {
+    clearTimeout(timeout);
+  }
 }

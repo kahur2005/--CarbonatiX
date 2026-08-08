@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { streamRecommendation } from "./api";
+import { postDocument, streamRecommendation } from "./api";
 import type { RecommendationEvent } from "@/types/emissions";
 
 /**
@@ -157,5 +157,87 @@ describe("streamRecommendation", () => {
     const good = `data: ${JSON.stringify(EVENT_B)}\n\n`;
     stubFetchWithStream(streamFromChunks(encode(malformed + good)));
     expect(await collect()).toEqual([EVENT_B]);
+  });
+});
+
+describe("postDocument timeout", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("passes an AbortSignal to fetch and aborts it after exactly 120 seconds", async () => {
+    vi.useFakeTimers();
+    let resolveFetch!: (response: {
+      ok: boolean;
+      json: () => Promise<{ candidates: never[]; confidenceIsPlaceholder: boolean }>;
+    }) => void;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveFetch = resolve;
+          }),
+      ),
+    );
+
+    const request = postDocument(
+      new File(["document"], "document.pdf", { type: "application/pdf" }),
+      "operational",
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalledOnce();
+    const init = vi.mocked(fetch).mock.calls[0][1];
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+    expect(init?.signal?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(119_999);
+    expect(init?.signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(init?.signal?.aborted).toBe(true);
+
+    resolveFetch({
+      ok: true,
+      json: async () => ({ candidates: [], confidenceIsPlaceholder: true }),
+    });
+    await request;
+  });
+
+  it("clears the timeout after a successful response", async () => {
+    vi.useFakeTimers();
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ candidates: [], confidenceIsPlaceholder: true }),
+      }),
+    );
+
+    await postDocument(
+      new File(["document"], "document.pdf", { type: "application/pdf" }),
+      "operational",
+    );
+
+    expect(clearTimeoutSpy).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("clears the timeout when fetch rejects", async () => {
+    vi.useFakeTimers();
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network failed")));
+
+    await expect(
+      postDocument(
+        new File(["document"], "document.pdf", { type: "application/pdf" }),
+        "operational",
+      ),
+    ).rejects.toThrow("network failed");
+
+    expect(clearTimeoutSpy).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
