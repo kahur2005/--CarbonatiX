@@ -1,0 +1,244 @@
+{
+  "job_id": "e52affba-7193-4568-9829-79ee01a416fa",
+  "type": "document_parsing",
+  "status": "succeeded",
+  "created_at": 1786127553.5450406,
+  "log": [
+    {
+      "timestamp": 1786127553.8020062,
+      "job_id": "e52affba-7193-4568-9829-79ee01a416fa",
+      "message": "Job started"
+    },
+    {
+      "timestamp": 1786127553.8744392,
+      "job_id": "e52affba-7193-4568-9829-79ee01a416fa",
+      "message": "Processing 1 pages (render → extract → read)"
+    },
+    {
+      "timestamp": 1786127553.956887,
+      "job_id": "e52affba-7193-4568-9829-79ee01a416fa",
+      "message": "Render phase complete: 1 / 1 pages"
+    },
+    {
+      "timestamp": 1786127554.119628,
+      "job_id": "e52affba-7193-4568-9829-79ee01a416fa",
+      "message": "Extracting page 1/1: 10 document elements"
+    },
+    {
+      "timestamp": 1786127554.1226382,
+      "job_id": "e52affba-7193-4568-9829-79ee01a416fa",
+      "message": "Reading 10 document elements across 1 pages"
+    },
+    {
+      "timestamp": 1786127554.9735188,
+      "job_id": "e52affba-7193-4568-9829-79ee01a416fa",
+      "message": "Reading paragraph_title 1/10: B. Reduktor dan Bahan Bakar"
+    },
+    {
+      "timestamp": 1786127554.9735396,
+      "job_id": "e52affba-7193-4568-9829-79ee01a416fa",
+      "message": "Reading header 2/10: PT SULAWESI NIKEL SEJAHTERA"
+    },
+    {
+      "timestamp": 1786127555.054494,
+      "job_id": "e52affba-7193-4568-9829-79ee01a416fa",
+      "message": "Reading table 3/10: <table><tr><td>Parameter</td><td colspan=\"2\">Nilai</td><td>Satuan</td></tr><tr><td>Kokas fosil</td><td></td><td>85</td><td>%</td></tr><tr><td>Substitusi biokokas (biomassa)</td><td></td><td>15</td><td"
+    },
+    {
+      "timestamp": 1786127555.1113274,
+      "job_id": "e52affba-7193-4568-9829-79ee01a416fa",
+      "message": "Reading paragraph_title 4/10: C. Pasokan Daya Listrik"
+    },
+    {
+      "timestamp": 1786127555.111349,
+      "job_id": "e52affba-7193-4568-9829-79ee01a416fa",
+      "message": "Reading paragraph_title 5/10: A. Umpan Bijih dan Kualitas"
+    },
+    {
+      "timestamp": 1786127555.1249597,
+      "job_id": "e52affba-7193-4568-9829-79ee01a416fa",
+      "message": "Reading text 6/10: Disiapkan oleh: Ir. Bagas Prasetyo — Supervisor Operasi Peleburan Diperiksa oleh: Sri Wahyuni, S.T. — Manajer Produksi"
+    },
+    {
+      "timestamp": 1786127555.173246,
+      "job_id": "e52affba-7193-4568-9829-79ee01a416fa",
+      "message": "Reading table 7/10: <table><tr><td><b>Sumber</b></td><td>Energi</td><td>Satuan</td><td>Porsi</td></tr><tr><td>PLTU captive (mulut tambang)</td><td>72.250</td><td>MWh</td><td>85%</td></tr><tr><td>PLTA / jaringan PLN</td><"
+    },
+    {
+      "timestamp": 1786127555.1864614,
+      "job_id": "e52affba-7193-4568-9829-79ee01a416fa",
+      "message": "Reading table 8/10: <table><tr><td>Parameter</td><td>Nilai</td><td>Satuan</td><td>Metode</td></tr><tr><td>Bijih basah diterima (as-received)</td><td>10.000</td><td>ton</td><td>Jembatan timbang</td></tr><tr><td>Bijih keri"
+    },
+    {
+      "timestamp": 1786127555.2286534,
+      "job_id": "e52affba-7193-4568-9829-79ee01a416fa",
+      "message": "Reading header 9/10: Smelter RKEF Line 2 — Kawasan Industri Morowali, Sulawesi Tengah LAPORAN OPERASIONAL HARIAN — Shift Gabungan (24 jam) No. dokumen: OPS/RKEF-2/VIII/2026-0417 · Tanggal: 7 Agustus 2026"
+    },
+    {
+      "timestamp": 1786127555.2560868,
+      "job_id": "e52affba-7193-4568-9829-79ee01a416fa",
+      "message": "Reading text 10/10: Catatan operasi: Kadar air umpan tidak diukur langsung pada shift ini karena moisture analyzer TM-02 sedang kalibrasi. Nilai kadar air dapat diturunkan dari selisih tonase basah dan kering pada Tabel "
+    },
+    {
+      "timestamp": 1786127555.259216,
+      "job_id": "e52affba-7193-4568-9829-79ee01a416fa",
+      "message": "All 1 pages processed"
+    },
+    {
+      "timestamp": 1786127555.385231,
+      "job_id": "e52affba-7193-4568-9829-79ee01a416fa",
+      "message": "Job completed successfully"
+    }
+  ],
+  "found": true,
+  "result": {
+    "page_count": 1,
+    "pages": [
+      {
+        "page": 1,
+        "elements": [
+          {
+            "bounding_box": [
+              115.0,
+              122.0,
+              625.0,
+              149.0
+            ],
+            "label": "header",
+            "score": 0.5016704797744751,
+            "content": "PT SULAWESI NIKEL SEJAHTERA",
+            "description": null,
+            "data": null,
+            "content_compact": "PT SULAWESI NIKEL SEJAHTERA"
+          },
+          {
+            "bounding_box": [
+              116.0,
+              154.0,
+              678.0,
+              221.0
+            ],
+            "label": "header",
+            "score": 0.8339747786521912,
+            "content": "Smelter RKEF Line 2 — Kawasan Industri Morowali, Sulawesi Tengah\nLAPORAN OPERASIONAL HARIAN — Shift Gabungan (24 jam)\nNo. dokumen: OPS/RKEF-2/VIII/2026-0417 · Tanggal: 7 Agustus 2026",
+            "description": null,
+            "data": null,
+            "content_compact": "Smelter RKEF Line 2 — Kawasan Industri Morowali, Sulawesi Tengah\nLAPORAN OPERASIONAL HARIAN — Shift Gabungan (24 jam)\nNo. dokumen: OPS/RKEF-2/VIII/2026-0417 · Tanggal: 7 Agustus 2026"
+          },
+          {
+            "bounding_box": [
+              116.0,
+              269.0,
+              421.0,
+              295.0
+            ],
+            "label": "paragraph_title",
+            "score": 0.8226556181907654,
+            "content": "A. Umpan Bijih dan Kualitas",
+            "description": null,
+            "data": null,
+            "content_compact": "A. Umpan Bijih dan Kualitas"
+          },
+          {
+            "bounding_box": [
+              122.0,
+              305.0,
+              1153.0,
+              500.0
+            ],
+            "label": "table",
+            "score": 0.9632588624954224,
+            "content": "<table><tr><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">Parameter</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">Nilai</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">Satuan</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">Metode</td></tr><tr><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">Bijih basah diterima (as-received)</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">10.000</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">ton</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">Jembatan timbang</td></tr><tr><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">Bijih kering setara (dry basis)</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">6.800</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">ton</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">Perhitungan lab</td></tr><tr><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">Kadar nikel umpan (Ni)</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">1,8</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">%</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">XRF</td></tr><tr><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">Kadar besi (Fe)</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">18,4</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">%</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">XRF</td></tr></table>",
+            "description": null,
+            "data": null,
+            "content_compact": "<table><tr><td>Parameter</td><td>Nilai</td><td>Satuan</td><td>Metode</td></tr><tr><td>Bijih basah diterima (as-received)</td><td>10.000</td><td>ton</td><td>Jembatan timbang</td></tr><tr><td>Bijih kering setara (dry basis)</td><td>6.800</td><td>ton</td><td>Perhitungan lab</td></tr><tr><td>Kadar nikel umpan (Ni)</td><td>1,8</td><td>%</td><td>XRF</td></tr><tr><td>Kadar besi (Fe)</td><td>18,4</td><td>%</td><td>XRF</td></tr></table>"
+          },
+          {
+            "bounding_box": [
+              117.0,
+              536.0,
+              436.0,
+              561.0
+            ],
+            "label": "paragraph_title",
+            "score": 0.8405808806419373,
+            "content": "B. Reduktor dan Bahan Bakar",
+            "description": null,
+            "data": null,
+            "content_compact": "B. Reduktor dan Bahan Bakar"
+          },
+          {
+            "bounding_box": [
+              121.0,
+              572.0,
+              1154.0,
+              728.0
+            ],
+            "label": "table",
+            "score": 0.9628592729568481,
+            "content": "<table><tr><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">Parameter</td><td colspan=\"2\" style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">Nilai</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">Satuan</td></tr><tr><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">Kokas fosil</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\"></td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">85</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">%</td></tr><tr><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">Substitusi biokokas (biomassa)</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\"></td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">15</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">%</td></tr><tr><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">Batu bara termal — dryer</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\"></td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">412</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">ton</td></tr></table>",
+            "description": null,
+            "data": null,
+            "content_compact": "<table><tr><td>Parameter</td><td colspan=\"2\">Nilai</td><td>Satuan</td></tr><tr><td>Kokas fosil</td><td></td><td>85</td><td>%</td></tr><tr><td>Substitusi biokokas (biomassa)</td><td></td><td>15</td><td>%</td></tr><tr><td>Batu bara termal — dryer</td><td></td><td>412</td><td>ton</td></tr></table>"
+          },
+          {
+            "bounding_box": [
+              117.0,
+              764.0,
+              372.0,
+              789.0
+            ],
+            "label": "paragraph_title",
+            "score": 0.8355151414871216,
+            "content": "C. Pasokan Daya Listrik",
+            "description": null,
+            "data": null,
+            "content_compact": "C. Pasokan Daya Listrik"
+          },
+          {
+            "bounding_box": [
+              120.0,
+              801.0,
+              1154.0,
+              956.0
+            ],
+            "label": "table",
+            "score": 0.9577010869979858,
+            "content": "<table><tr><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\"><b>Sumber</b></td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">Energi</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">Satuan</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">Porsi</td></tr><tr><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">PLTU captive (mulut tambang)</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">72.250</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">MWh</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">85%</td></tr><tr><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">PLTA / jaringan PLN</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">12.750</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">MWh</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">15%</td></tr><tr><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\"><b>Total konsumsi</b></td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\"><b>85.000</b></td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\">MWh</td><td style=\"border-top: 1px solid black; border-right: 1px solid black; border-bottom: 1px solid black; border-left: 1px solid black\"><b>100%</b></td></tr></table>",
+            "description": null,
+            "data": null,
+            "content_compact": "<table><tr><td><b>Sumber</b></td><td>Energi</td><td>Satuan</td><td>Porsi</td></tr><tr><td>PLTU captive (mulut tambang)</td><td>72.250</td><td>MWh</td><td>85%</td></tr><tr><td>PLTA / jaringan PLN</td><td>12.750</td><td>MWh</td><td>15%</td></tr><tr><td><b>Total konsumsi</b></td><td><b>85.000</b></td><td>MWh</td><td><b>100%</b></td></tr></table>"
+          },
+          {
+            "bounding_box": [
+              134.0,
+              986.0,
+              1153.0,
+              1046.0
+            ],
+            "label": "text",
+            "score": 0.877106785774231,
+            "content": "Catatan operasi: Kadar air umpan tidak diukur langsung pada shift ini karena moisture analyzer TM-02 sedang kalibrasi. Nilai kadar air dapat diturunkan dari selisih tonase basah dan kering pada Tabel A. Kadar nikel dilaporkan pada basis kering. Angka porsi daya dibulatkan ke bilangan bulat terdekat.",
+            "description": null,
+            "data": null,
+            "content_compact": "Catatan operasi: Kadar air umpan tidak diukur langsung pada shift ini karena moisture analyzer TM-02 sedang kalibrasi. Nilai kadar air dapat diturunkan dari selisih tonase basah dan kering pada Tabel A. Kadar nikel dilaporkan pada basis kering. Angka porsi daya dibulatkan ke bilangan bulat terdekat."
+          },
+          {
+            "bounding_box": [
+              116.0,
+              1095.0,
+              633.0,
+              1136.0
+            ],
+            "label": "text",
+            "score": 0.5802087187767029,
+            "content": "Disiapkan oleh: Ir. Bagas Prasetyo — Supervisor Operasi Peleburan Diperiksa oleh: Sri Wahyuni, S.T. — Manajer Produksi",
+            "description": null,
+            "data": null,
+            "content_compact": "Disiapkan oleh: Ir. Bagas Prasetyo — Supervisor Operasi Peleburan Diperiksa oleh: Sri Wahyuni, S.T. — Manajer Produksi"
+          }
+        ]
+      }
+    ]
+  }
+}
