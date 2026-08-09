@@ -72,7 +72,29 @@ def test_permitted_numerals_include_every_supplied_figure():
     p = assess(r, cap_tco2e=r.total_emissions - 500, carbon_price_idr_per_ton=35200.0)
     _, permitted = build_prompt(r, p, FORECAST, select_clauses(is_compliant=False))
     assert f"{r.total_emissions:.1f}" in permitted
-    assert f"{p.position_tco2e:.1f}" in permitted
+    assert f"{abs(p.position_tco2e):.1f}" in permitted
+
+
+def test_surplus_position_magnitude_is_permitted_and_passes_guard():
+    r = calculate_emissions(**NOMINAL)
+    # Cap above emissions → negative position_tco2e (surplus)
+    p = assess(r, cap_tco2e=r.total_emissions + 500.0, carbon_price_idr_per_ton=35200.0)
+    assert p.position_tco2e < 0
+    _, permitted = build_prompt(r, p, FORECAST, select_clauses(is_compliant=True))
+    mag = f"{abs(p.position_tco2e):.1f}"
+    assert mag in permitted
+    # Signed form must not be required for the scan (scanner is digit-only)
+    good = f"Posisi surplus sebesar {mag} tCO2e dan dapat dijual sebagai kredit."
+    assert unsupported_numerals(good, permitted) == set()
+
+
+def test_prompt_figures_label_carries_surplus_not_minus_sign():
+    r = calculate_emissions(**NOMINAL)
+    p = assess(r, cap_tco2e=r.total_emissions + 500.0, carbon_price_idr_per_ton=35200.0)
+    text, _permitted = build_prompt(r, p, FORECAST, select_clauses(is_compliant=True))
+    assert f"{p.position_tco2e:.1f}" not in text  # no "-139.1" style token in figures
+    assert f"{abs(p.position_tco2e):.1f}" in text
+    assert "Surplus" in text or "surplus" in text
 
 
 def test_invented_figure_is_caught():

@@ -244,13 +244,26 @@ def build_prompt(
     clauses: list[Clause],
 ) -> tuple[str, set[str]]:
     """Assemble the prompt and the set of numerals the model may use."""
+    # Position is signed in CompliancePosition (negative = surplus), but the
+    # numeral scanner only matches digit runs — a permitted "-139.1" never
+    # equals a scanned "139.1". Emit the absolute magnitude and put Surplus /
+    # Defisit / Tepat kuota in the label so a correctly quoted surplus figure
+    # is not false-flagged.
+    _pos = position.position_tco2e
+    if _pos < 0:
+        _pos_label = "Posisi karbon Surplus (tCO2e)"
+    elif _pos > 0:
+        _pos_label = "Posisi karbon Defisit (tCO2e)"
+    else:
+        _pos_label = "Posisi karbon Tepat kuota (tCO2e)"
+
     figures = {
         "Total emisi (tCO2e)": f"{result.total_emissions:.1f}",
         "Scope 1 (tCO2e)": f"{result.scope_1:.1f}",
         "Scope 2 (tCO2e)": f"{result.scope_2:.1f}",
         "Produksi nikel (ton)": f"{result.nickel_output_tons:.1f}",
         "Kuota (tCO2e)": f"{position.cap_tco2e:.1f}",
-        "Posisi karbon (tCO2e)": f"{position.position_tco2e:.1f}",
+        _pos_label: f"{abs(_pos):.1f}",
         "Nilai posisi (IDR)": f"{position.position_value_idr:.0f}",
         "Harga karbon IDX (IDR/ton)": f"{forecast['idxCarbonIdrPerTon'][0]:.0f}",
         "Harga nikel LME (USD/ton)": f"{forecast['lmeUsdPerTon'][0]:.0f}",
