@@ -109,9 +109,8 @@ def test_reconstruction_round_trips_a_committed_run(fake_db, monkeypatch):
 
 
 def test_placeholder_citation_flag_reaches_the_http_response(fake_db, monkeypatch):
-    """corpus.has_placeholder_text() is True today -- the flag must be
-    visible on the actual streamed HTTP response, not just on the pipeline
-    generator's own return value."""
+    """The flag must be visible on the streamed HTTP response. With the
+    gazetted corpus it is False on every event."""
 
     async def fake_call(prompt: str) -> str:
         return "Posisi defisit."
@@ -124,7 +123,7 @@ def test_placeholder_citation_flag_reaches_the_http_response(fake_db, monkeypatc
     r = client.get(f"/runs/{run_id}/recommendation")
     events = _parse_sse(r.text)
     assert events
-    assert all(e["placeholderCitations"] is True for e in events)
+    assert all(e["placeholderCitations"] is False for e in events)
 
 
 def test_model_failure_streams_a_failed_synthesise_stage_only(fake_db, monkeypatch):

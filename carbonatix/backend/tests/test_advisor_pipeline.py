@@ -7,7 +7,7 @@ to pin the wire-level request the Elice gateway will actually receive.
 Three things this module pins down, matching the guarantees the rest of the
 backend already makes for provisional data:
 
-1. Placeholder regulation text (`corpus.has_placeholder_text`) must reach
+1. The `placeholderCitations` label (`corpus.has_placeholder_text`) must reach
    both the top-level event shape and the `verify` stage's payload.
 2. A model-call failure must fail only the `synthesise` stage and produce
    nothing that looks like a recommendation -- the run itself is untouched.
@@ -92,10 +92,9 @@ async def test_invented_figure_flags_the_recommendation(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_every_event_carries_the_placeholder_citation_flag(monkeypatch):
-    """corpus.has_placeholder_text() is True today (see corpus.py's notice) --
-    every event, regardless of stage or status, must surface that as an
-    unambiguous top-level boolean so a citation chip can render as
-    "not yet authoritative" without inspecting stage-specific payloads."""
+    """Every event must surface `placeholderCitations` as an unambiguous
+    top-level boolean. With a real corpus it is False; a consumer still
+    never has to special-case stage payloads to learn the label."""
 
     async def fake_call(prompt: str) -> str:
         return "Posisi defisit."
@@ -106,10 +105,10 @@ async def test_every_event_carries_the_placeholder_citation_flag(monkeypatch):
     events = [e async for e in pipeline.run_pipeline(r, p, FORECAST)]
     assert events, "expected at least one event"
     for e in events:
-        assert e["placeholderCitations"] is True
+        assert e["placeholderCitations"] is False
 
     verify_done = next(e for e in events if e["stage"] == "verify" and e["status"] == "done")
-    assert verify_done["payload"]["placeholderCitations"] is True
+    assert verify_done["payload"]["placeholderCitations"] is False
 
 
 @pytest.mark.asyncio

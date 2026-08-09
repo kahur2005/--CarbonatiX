@@ -149,9 +149,13 @@ Aturan mutlak:
   kata pengali seperti "ribu", "juta", "miliar", atau "triliun", dan TANPA
   angka yang dieja dengan huruf (contoh: "lima puluh ribu"). Bentuk selain
   digit mentah akan ditolak sistem.
-- Kutip pasal persis seperti tertulis. Jangan memparafrasa klausa hukum.
-- Nyatakan secara eksplisit bahwa PLTU captive saat ini di luar cakupan wajib
-  PTBAE-PU, sehingga status ini bersifat kesiapan, bukan pelanggaran berlaku.
+- Kutip pasal dengan string `ref` persis seperti di blok [ref] (contoh:
+  "Perpres 110/2025 Pasal 55"). Bentuk panjang "Nomor … Tahun …" untuk
+  instrumen yang sama diperbolehkan; jangan mengarang nomor/tahun lain.
+- Jangan memparafrasa isi klausa hukum.
+- Bedakan kesiapan kepatuhan (termasuk PTBAE untuk PLTU kepentingan sendiri
+  sesuai Permen ESDM 16/2022 Pasal 5) dari klaim pelanggaran yang belum
+  diverifikasi di lapangan.
 """
 
 # Shown in place of a genuine "cite this as law" instruction whenever the
@@ -282,11 +286,15 @@ def build_prompt(
     # part of that citation -- but permitting them everywhere in the output
     # would let a fabricated quantity that happens to match an article
     # number (e.g. a made-up "110 ton") launder through unchecked. So the
-    # ref text itself is recorded here, tagged with `_CITATION_PREFIX`, and
-    # `unsupported_numerals` only exempts a numeral that falls inside an
-    # actual occurrence of the ref text in the output -- never globally.
+    # ref text itself (plus Indonesian long-form aliases) is recorded here,
+    # tagged with `_CITATION_PREFIX`, and `unsupported_numerals` only
+    # exempts a numeral that falls inside an actual occurrence of that
+    # phrase in the output -- never globally.
     for c in clauses:
-        permitted.add(f"{_CITATION_PREFIX}{c.ref}")
+        for alias in _citation_aliases(c.ref):
+            permitted.add(f"{_CITATION_PREFIX}{alias}")
+        for phrase in _clause_quote_phrases(c.text):
+            permitted.add(f"{_CITATION_PREFIX}{phrase}")
 
     text = _TEMPLATE.format(
         figures=figures_block,
@@ -296,12 +304,91 @@ def build_prompt(
     return text, permitted
 
 
+def _citation_aliases(ref: str) -> list[str]:
+    """Exact `ref` plus Indonesian long forms the model commonly emits.
+
+    Only full instrument phrases are returned — never bare years — so spans
+    cannot launder a fabricated quantity that happens to match an article
+    number.
+    """
+    aliases = [ref]
+    # Explicit map keyed by the short refs shipped in CORPUS.
+    by_ref: dict[str, tuple[str, ...]] = {
+        "Perpres 98/2021 Pasal 47": (
+            "Peraturan Presiden Nomor 98 Tahun 2021 Pasal 47",
+            "Peraturan Presiden Nomor 98 Tahun 2021",
+            "Perpres Nomor 98 Tahun 2021 Pasal 47",
+            "Perpres Nomor 98 Tahun 2021",
+        ),
+        "Permen ESDM 16/2022 Pasal 28": (
+            "Peraturan Menteri Energi dan Sumber Daya Mineral Nomor 16 Tahun 2022 Pasal 28",
+            "Permen ESDM Nomor 16 Tahun 2022 Pasal 28",
+            "Peraturan Menteri ESDM Nomor 16 Tahun 2022 Pasal 28",
+            "Permen ESDM Nomor 16 Tahun 2022",
+        ),
+        "Permen ESDM 16/2022 Pasal 5": (
+            "Peraturan Menteri Energi dan Sumber Daya Mineral Nomor 16 Tahun 2022 Pasal 5",
+            "Permen ESDM Nomor 16 Tahun 2022 Pasal 5",
+            "Peraturan Menteri ESDM Nomor 16 Tahun 2022 Pasal 5",
+        ),
+        "Perpres 110/2025 Pasal 55": (
+            "Peraturan Presiden Nomor 110 Tahun 2025 Pasal 55",
+            "Peraturan Presiden Nomor 110 Tahun 2025",
+            "Perpres Nomor 110 Tahun 2025 Pasal 55",
+            "Perpres Nomor 110 Tahun 2025",
+        ),
+        "Permen LHK P.71/2017 Pasal 2": (
+            "Peraturan Menteri Lingkungan Hidup dan Kehutanan Nomor P.71 Tahun 2017 Pasal 2",
+            "Permen LHK Nomor P.71/MENLHK/SETJEN/KUM.1/12/2017 Pasal 2",
+            "Permen LHK P.71 Tahun 2017 Pasal 2",
+            "Permen LHK Nomor P.71 Tahun 2017",
+        ),
+    }
+    aliases.extend(by_ref.get(ref, ()))
+    # Longer aliases first so `_citation_spans` records the widest match when
+    # overlapping phrases both appear (find still records every occurrence).
+    return sorted(set(aliases), key=len, reverse=True)
+
+
+def _clause_quote_phrases(clause_text: str) -> list[str]:
+    """Phrases inside clause bodies that carry 3+ digit numerals the model
+    may quote (e.g. a statutory deadline). Registered as span keys only —
+    never as globally permitted figures.
+    """
+    phrases: list[str] = []
+    for match in _NUMERAL.finditer(clause_text):
+        token = match.group()
+        if len(_canonical(token).replace(".", "")) <= 2:
+            continue
+        # Prefer a short, stable window the model is likely to reuse verbatim.
+        start = match.start()
+        end = match.end()
+        # Extend left across letters/spaces to capture "tanggal 31 Desember ".
+        left = start
+        while left > 0 and (clause_text[left - 1].isalpha() or clause_text[left - 1] in " \t"):
+            left -= 1
+            if start - left > 40:
+                break
+        phrase = clause_text[left:end].strip()
+        if phrase:
+            phrases.append(phrase)
+        # Also the bare date-shaped tail when present ("31 Desember 2024").
+        window = clause_text[max(0, start - 20) : end]
+        m = re.search(r"\d{1,2}\s+Desember\s+" + re.escape(token), window)
+        if m:
+            phrases.append(m.group())
+    return phrases
+
+
 def _citation_spans(output: str, permitted: set[str]) -> list[tuple[int, int]]:
     """Character ranges in `output` that are an actual occurrence of a
-    clause's `ref` text, so numerals that are genuinely part of a citation
-    (e.g. "18" in "...Pasal 18") are excluded from the numeral scan without
-    exempting that digit sequence anywhere else it appears."""
+    clause's `ref` text (or an approved alias / quote phrase), so numerals
+    that are genuinely part of a citation are excluded from the numeral
+    scan without exempting that digit sequence anywhere else it appears."""
     refs = [p[len(_CITATION_PREFIX) :] for p in permitted if p.startswith(_CITATION_PREFIX)]
+    # Longest first: when both a short and long alias match overlapping
+    # ranges, the long span still fully covers the digits.
+    refs = sorted(set(refs), key=len, reverse=True)
     spans = []
     for ref in refs:
         start = 0

@@ -224,7 +224,7 @@ export interface RecommendationVerifyPayload {
   flagged: boolean;
   /** The specific fabricated tokens; only meaningful when `flagged`. */
   unsupported: string[];
-  /** Clause refs (e.g. "Permen ESDM 16/2022 Pasal 18") that appear
+  /** Clause refs (e.g. "Permen ESDM 16/2022 Pasal 28") that appear
    * verbatim in `body`. Ref strings only -- `run_pipeline`'s `verify`
    * event never sends clause body text over this endpoint, so there is no
    * verbatim article text to expand a citation chip into on the frontend;

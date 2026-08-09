@@ -28,6 +28,10 @@ out/
 playwright-report/
 test-results/
 
+# Advisor regulation PDF provenance (multi-MB scans; see SOURCES.md)
+carbonatix/backend/advisor_sources/*.pdf
+carbonatix/backend/advisor_sources/_extracted/
+
 # OS
 Thumbs.db
 .DS_Store

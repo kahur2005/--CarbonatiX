@@ -9,12 +9,10 @@ Two anti-hallucination mechanisms are exercised here:
    figures that appear in the prompt; anything else is a fabricated number
    that must not reach a compliance decision.
 
-The corpus currently ships with placeholder clause text (see the notice at
-the top of `app/advisor/corpus.py`): nobody writing this module had access to
-the real regulation text, and approximating it would be worse than shipping
-nothing. `test_corpus_currently_has_placeholder_text` and
-`test_prompt_warns_while_corpus_is_placeholder` pin down that this state is
-detected and surfaced rather than silently passed through as real law.
+The corpus ships gazetted pasal text (see `advisor_sources/SOURCES.md`).
+`test_corpus_has_no_placeholder_text` pins that every clause body is real;
+`PLACEHOLDER_SENTINEL` remains so a regression that reintroduces paste
+sentinels is still detectable.
 """
 
 from app.advisor.corpus import CORPUS, PLACEHOLDER_SENTINEL, has_placeholder_text, select_clauses
@@ -45,7 +43,19 @@ def test_corpus_clauses_carry_a_traceable_reference():
     assert CORPUS
     for c in CORPUS:
         assert c.ref and c.text
-        assert any(k in c.ref for k in ("Perpres", "Permen", "SRN"))
+        assert any(k in c.ref for k in ("Perpres", "Permen"))
+        assert PLACEHOLDER_SENTINEL not in c.text
+
+
+def test_corpus_refs_match_remapped_instruments():
+    refs = {c.ref for c in CORPUS}
+    assert "Perpres 98/2021 Pasal 47" in refs
+    assert "Permen ESDM 16/2022 Pasal 28" in refs
+    assert "Permen ESDM 16/2022 Pasal 5" in refs
+    assert "Perpres 110/2025 Pasal 55" in refs
+    assert "Permen LHK P.71/2017 Pasal 2" in refs
+    assert "Permen ESDM 2/2023" not in refs
+    assert "SRN-PPI" not in refs
 
 
 def test_deficit_selects_at_least_one_clause():
@@ -123,25 +133,17 @@ def test_supplied_figure_passes_the_check():
 # -- Placeholder detection --------------------------------------------------
 
 
-def test_corpus_currently_has_placeholder_text():
-    """Pinned RED until every clause's `text` is replaced with the real
-    gazetted article. If this ever flips to False without a corresponding
-    rewrite of every clause body, something has gone quietly wrong."""
-    assert has_placeholder_text() is True
-    assert any(PLACEHOLDER_SENTINEL in c.text for c in CORPUS)
+def test_corpus_has_no_placeholder_text():
+    assert has_placeholder_text() is False
+    assert all(PLACEHOLDER_SENTINEL not in c.text for c in CORPUS)
 
 
-def test_prompt_warns_while_corpus_is_placeholder():
-    """While placeholder text is in play, the prompt must say so plainly and
-    must not let the model treat placeholder text as authoritative law."""
+def test_prompt_has_no_placeholder_warning_when_corpus_is_real():
     r = calculate_emissions(**NOMINAL)
     p = assess(r, cap_tco2e=r.total_emissions - 500, carbon_price_idr_per_ton=35200.0)
-    clauses = select_clauses(is_compliant=False)
-    assert any(PLACEHOLDER_SENTINEL in c.text for c in clauses)
-
-    text, _ = build_prompt(r, p, FORECAST, clauses)
-    assert "PLACEHOLDER" in text
-    assert "otoritatif" in text.lower()
+    text, _ = build_prompt(r, p, FORECAST, select_clauses(is_compliant=False))
+    assert "PLACEHOLDER" not in text
+    assert PLACEHOLDER_SENTINEL not in text
 
 
 # -- Numeral canonicalisation: Indonesian thousands/decimal formatting ------
@@ -188,8 +190,8 @@ def test_article_numbers_in_a_genuine_citation_are_not_flagged():
     p = assess(r, cap_tco2e=r.total_emissions - 500, carbon_price_idr_per_ton=35200.0)
     clauses = select_clauses(is_compliant=False)
     _, permitted = build_prompt(r, p, FORECAST, clauses)
-    ref = next(c.ref for c in clauses if c.ref == "Permen ESDM 16/2022 Pasal 18")
-    good = f"Sesuai [{ref}], sanksi pemotongan kuota berlaku."
+    ref = next(c.ref for c in clauses if c.ref == "Permen ESDM 16/2022 Pasal 28")
+    good = f"Sesuai [{ref}], alokasi PTBAE-PU periode berikutnya dapat dipotong."
     assert unsupported_numerals(good, permitted) == set()
 
 
@@ -197,14 +199,14 @@ def test_article_numbers_in_a_genuine_citation_are_not_flagged():
 
 
 def test_citation_numeral_does_not_launder_a_fabricated_quantity_elsewhere():
-    """A regulation year/number (e.g. '2025' from 'Perpres 110/2025', '110'
-    from the same ref) must only be exempt where it is genuinely part of a
-    citation -- not anywhere in the output. Otherwise a fabricated tonnage
-    that happens to match an article number passes for free."""
+    """A regulation year/number (e.g. '2025' from 'Perpres 110/2025 Pasal 55',
+    '110' from the same ref) must only be exempt where it is genuinely part
+    of a citation -- not anywhere in the output. Otherwise a fabricated
+    tonnage that happens to match an article number passes for free."""
     r = calculate_emissions(**NOMINAL)
     p = assess(r, cap_tco2e=r.total_emissions - 500, carbon_price_idr_per_ton=35200.0)
     clauses = select_clauses(is_compliant=False)
-    assert any(c.ref == "Perpres 110/2025" for c in clauses)
+    assert any(c.ref == "Perpres 110/2025 Pasal 55" for c in clauses)
     _, permitted = build_prompt(r, p, FORECAST, clauses)
 
     bad_year = "Kami merekomendasikan pembelian 2025 ton kredit karbon tambahan."
@@ -212,6 +214,33 @@ def test_citation_numeral_does_not_launder_a_fabricated_quantity_elsewhere():
 
     bad_article = "Kami merekomendasikan pembelian 110 ton kredit karbon tambahan."
     assert "110" in unsupported_numerals(bad_article, permitted)
+
+
+def test_indonesian_nomor_tahun_citation_form_is_not_flagged():
+    r = calculate_emissions(**NOMINAL)
+    p = assess(r, cap_tco2e=r.total_emissions - 500, carbon_price_idr_per_ton=35200.0)
+    clauses = select_clauses(is_compliant=False)
+    _, permitted = build_prompt(r, p, FORECAST, clauses)
+    prose = (
+        "Sesuai Peraturan Presiden Nomor 98 Tahun 2021 Pasal 47 dan "
+        "Peraturan Presiden Nomor 110 Tahun 2025 Pasal 55, serta "
+        "Permen ESDM Nomor 16 Tahun 2022 Pasal 28, posisi defisit "
+        f"sebesar {abs(p.position_tco2e):.1f} tCO2e perlu ditutup."
+    )
+    assert unsupported_numerals(prose, permitted) == set()
+
+
+def test_quoted_statutory_deadline_from_clause_body_is_not_flagged():
+    """Pasal 5 carries '31 Desember 2024'; quoting that deadline must not
+    look like a fabricated tonnage."""
+    r = calculate_emissions(**NOMINAL)
+    p = assess(r, cap_tco2e=r.total_emissions - 500, carbon_price_idr_per_ton=35200.0)
+    _, permitted = build_prompt(r, p, FORECAST, select_clauses(is_compliant=False))
+    good = (
+        "PTBAE untuk usaha penyediaan tenaga listrik untuk kepentingan "
+        "sendiri ditetapkan paling lambat tanggal 31 Desember 2024."
+    )
+    assert unsupported_numerals(good, permitted) == set()
 
 
 # -- Indonesian magnitude words and spelled-out numbers -----------------------
@@ -442,11 +471,13 @@ def test_comma_separated_citation_list_is_not_flagged():
     _, permitted = build_prompt(r, p, FORECAST, clauses)
 
     refs = [c.ref for c in clauses]
-    assert "Permen ESDM 2/2023" in refs and "Perpres 110/2025" in refs
+    assert "Permen ESDM 16/2022 Pasal 5" in refs
+    assert "Perpres 110/2025 Pasal 55" in refs
     prose = (
         "Rekomendasi ini wajib divalidasi terhadap teks resmi: "
-        "Perpres 98/2021 Pasal 47, Permen ESDM 16/2022 Pasal 18, "
-        "Permen ESDM 2/2023, Perpres 110/2025, dan ketentuan SRN-PPI."
+        "Perpres 98/2021 Pasal 47, Permen ESDM 16/2022 Pasal 28, "
+        "Permen ESDM 16/2022 Pasal 5, Perpres 110/2025 Pasal 55, "
+        "dan Permen LHK P.71/2017 Pasal 2."
     )
     assert unsupported_numerals(prose, permitted) == set()
 
