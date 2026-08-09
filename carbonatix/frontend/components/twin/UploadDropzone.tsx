@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { useTheme } from "@/components/shell/ThemeProvider";
 import { postDocument } from "@/lib/api";
 import { candidateDisplayValue } from "@/lib/onboarding";
 import type { Candidate } from "@/types/emissions";
@@ -24,27 +25,33 @@ interface UploadDropzoneProps {
    * label and display it. */
   fieldLabels: Record<string, FieldMeta>;
   /**
-   * Called once per field, and only in direct response to the user
-   * clicking "Terima" on that field's row. `displayValue` is already in
-   * the unit the form shows (a percentage for percentage-valued fields),
-   * so the caller can drop it straight into its own form state.
+   * Called for each readable candidate after a successful upload. Upload is
+   * the explicit user action; this only mutates parent form state — never
+   * `companies` / `calculation_runs`. `displayValue` is already in the unit
+   * the form shows (a percentage for percentage-valued fields).
    */
   onAccept: (field: string, displayValue: number) => void;
+  /** Optional clearer when the user clicks Perbaiki on a filled field. */
+  onClear?: (field: string) => void;
 }
 
 type CandidateStatus = "pending" | "accepted" | "dismissed";
 
 /**
- * A dropzone that posts a document to `POST /documents` and renders the
- * returned candidates as a review list -- never as form values.
+ * A dropzone that posts a document to `POST /documents`, auto-fills form
+ * state for every non-null candidate, and lists filled vs unreadable rows.
  *
- * OCR output is a candidate, never a value: nothing here writes to a form
- * except through `onAccept`, and `onAccept` fires only from a "Terima"
- * button's `onClick`. A candidate with `value === null` renders as "Tidak
- * terbaca" with no accept button at all, because there is nothing to
- * accept -- the corresponding field stays exactly as blank as it started.
+ * OCR still never writes the database: only parent form state via `onAccept`.
+ * Null candidates stay blank. Perbaiki clears that field (via `onClear`) for
+ * manual edit.
  */
-export default function UploadDropzone({ profile, fieldLabels, onAccept }: UploadDropzoneProps) {
+export default function UploadDropzone({
+  profile,
+  fieldLabels,
+  onAccept,
+  onClear,
+}: UploadDropzoneProps) {
+  const { colors: C } = useTheme();
   const inputRef = useRef<HTMLInputElement>(null);
   const requestGeneration = useRef(0);
   const [pending, setPending] = useState(false);
@@ -70,6 +77,20 @@ export default function UploadDropzone({ profile, fieldLabels, onAccept }: Uploa
       setCandidates(result.candidates);
       setConfidenceIsPlaceholder(result.confidenceIsPlaceholder);
       setHasResult(true);
+
+      const nextStatuses: Record<string, CandidateStatus> = {};
+      for (const candidate of result.candidates) {
+        if (candidate.value === null) continue;
+        const meta = fieldLabels[candidate.field];
+        const displayValue = candidateDisplayValue(
+          candidate.value,
+          meta?.isPercent ?? false,
+        );
+        if (displayValue === null) continue;
+        onAccept(candidate.field, displayValue);
+        nextStatuses[candidate.field] = "accepted";
+      }
+      setStatuses(nextStatuses);
     } catch (err) {
       if (generation !== requestGeneration.current) return;
       if (err instanceof DOMException && err.name === "AbortError") {
@@ -85,16 +106,8 @@ export default function UploadDropzone({ profile, fieldLabels, onAccept }: Uploa
     }
   }
 
-  function handleAccept(candidate: Candidate) {
-    if (candidate.value === null) return;
-    const meta = fieldLabels[candidate.field];
-    const displayValue = candidateDisplayValue(candidate.value, meta?.isPercent ?? false);
-    if (displayValue === null) return;
-    onAccept(candidate.field, displayValue);
-    setStatuses((prev) => ({ ...prev, [candidate.field]: "accepted" }));
-  }
-
   function handleDismiss(candidate: Candidate) {
+    onClear?.(candidate.field);
     setStatuses((prev) => ({ ...prev, [candidate.field]: "dismissed" }));
   }
 
@@ -102,7 +115,7 @@ export default function UploadDropzone({ profile, fieldLabels, onAccept }: Uploa
     candidates.length === 0 || candidates.every((candidate) => candidate.value === null);
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-3" style={{ color: C.text }}>
       <div
         role="button"
         tabIndex={0}
@@ -124,11 +137,11 @@ export default function UploadDropzone({ profile, fieldLabels, onAccept }: Uploa
           setDragOver(false);
           handleFiles(e.dataTransfer.files);
         }}
-        className={`flex cursor-pointer flex-col items-center gap-1 rounded-lg border border-dashed px-4 py-8 text-center transition-colors ${
-          dragOver
-            ? "border-black bg-black/[.03] dark:border-white dark:bg-white/[.06]"
-            : "border-black/[.2] dark:border-white/[.25]"
-        }`}
+        className="flex cursor-pointer flex-col items-center gap-1 rounded-lg border border-dashed px-4 py-8 text-center transition-opacity"
+        style={{
+          borderColor: dragOver ? C.cyan : C.border,
+          background: dragOver ? `${C.cyan}12` : "transparent",
+        }}
       >
         <input
           ref={inputRef}
@@ -137,37 +150,43 @@ export default function UploadDropzone({ profile, fieldLabels, onAccept }: Uploa
           className="hidden"
           onChange={(e) => handleFiles(e.target.files)}
         />
-        <p className="text-sm font-medium text-black dark:text-zinc-50">
+        <p className="text-sm font-medium" style={{ color: C.text }}>
           Seret dokumen ke sini, atau klik untuk memilih file
         </p>
-        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+        <p className="text-xs" style={{ color: C.muted }}>
           Foto atau pindaian (JPG, PNG, PDF)
         </p>
       </div>
 
       {pending && (
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">Membaca dokumen...</p>
+        <p className="text-sm" style={{ color: C.dimText }}>
+          Membaca dokumen...
+        </p>
       )}
 
       {error && (
-        <p role="alert" className="text-sm text-red-600 dark:text-red-400">
+        <p role="alert" className="text-sm" style={{ color: C.red }}>
           {error}
         </p>
       )}
 
       {hasResult && !pending && allUnreadable && (
-        <p role="status" className="text-sm text-zinc-600 dark:text-zinc-400">
+        <p role="status" className="text-sm" style={{ color: C.dimText }}>
           Dokumen berhasil dibaca, tetapi tidak ada medan yang dicari ditemukan di dalamnya.
           Masukkan nilai secara manual.
         </p>
       )}
 
       {candidates.length > 0 && (
-        <div className="flex flex-col gap-2 rounded-lg border border-black/[.08] p-3 dark:border-white/[.145]">
+        <div
+          className="flex flex-col gap-2 rounded-lg p-3"
+          style={{ border: `1px solid ${C.border}` }}
+        >
           {confidenceIsPlaceholder && (
-            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+            <p className="text-xs" style={{ color: C.muted }}>
               Skor &ldquo;terbaca&rdquo; berasal dari kualitas elemen dokumen Helpy, bukan
-              keandalan per medan. Periksa tiap nilai sebelum menerimanya.
+              keandalan per medan. Periksa nilai yang terisi; Perbaiki untuk mengosongkan
+              dan mengisi manual.
             </p>
           )}
           <ul className="flex flex-col gap-2">
@@ -183,24 +202,34 @@ export default function UploadDropzone({ profile, fieldLabels, onAccept }: Uploa
               return (
                 <li
                   key={candidate.field}
-                  className="flex flex-wrap items-center justify-between gap-2 rounded border border-black/[.08] px-3 py-2 text-sm dark:border-white/[.145]"
+                  className="flex flex-wrap items-center justify-between gap-2 rounded px-3 py-2 text-sm"
+                  style={{ border: `1px solid ${C.border}` }}
                 >
                   <div className="flex min-w-0 flex-col">
-                    <span className="font-medium text-black dark:text-zinc-50">
+                    <span className="font-medium" style={{ color: C.text }}>
                       {meta?.label ?? candidate.field}
                     </span>
-                    <span className="text-zinc-600 dark:text-zinc-400">
+                    <span style={{ color: C.dimText }}>
                       {displayValue === null
                         ? "Tidak terbaca"
                         : `${displayValue}${meta?.unit ? ` ${meta.unit}` : ""}`}
                     </span>
                     {candidate.basis === "derived" && (
-                      <span className="mt-1 w-fit rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900 dark:bg-amber-900/40 dark:text-amber-200">
+                      <span
+                        className="mt-1 w-fit rounded-full px-2 py-0.5 text-xs font-medium"
+                        style={{
+                          background: `${C.amber}22`,
+                          color: C.amber,
+                        }}
+                      >
                         Dihitung, bukan dibaca
                       </span>
                     )}
                     {candidate.derivation && (
-                      <span className="mt-1 break-words font-mono text-xs text-zinc-500 dark:text-zinc-400">
+                      <span
+                        className="mt-1 break-words font-mono text-xs"
+                        style={{ color: C.muted }}
+                      >
                         {candidate.derivation}
                       </span>
                     )}
@@ -208,11 +237,11 @@ export default function UploadDropzone({ profile, fieldLabels, onAccept }: Uploa
 
                   <div className="flex items-center gap-2">
                     <span
-                      className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                        readable
-                          ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
-                          : "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
-                      }`}
+                      className="rounded-full px-2 py-0.5 text-xs font-medium"
+                      style={{
+                        background: readable ? `${C.green}22` : C.panel,
+                        color: readable ? C.green : C.muted,
+                      }}
                       title={
                         confidenceIsPlaceholder
                           ? "Bukan skor keandalan -- hanya menandai apakah nilai terbaca."
@@ -222,32 +251,32 @@ export default function UploadDropzone({ profile, fieldLabels, onAccept }: Uploa
                       {readable ? "Terbaca" : "Tidak terbaca"}
                     </span>
 
-                    {status === "pending" && readable && (
+                    {status === "accepted" && (
                       <>
-                        <button
-                          type="button"
-                          onClick={() => handleAccept(candidate)}
-                          className="rounded-full bg-foreground px-3 py-1 text-xs font-medium text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc]"
-                        >
-                          Terima
-                        </button>
+                        <span className="text-xs font-medium" style={{ color: C.green }}>
+                          Diterima
+                        </span>
                         <button
                           type="button"
                           onClick={() => handleDismiss(candidate)}
-                          className="rounded-full border border-black/[.15] px-3 py-1 text-xs font-medium text-black transition-colors hover:bg-black/[.04] dark:border-white/[.2] dark:text-zinc-50 dark:hover:bg-white/[.08]"
+                          className="rounded-md px-3 py-1 text-xs font-medium transition-opacity hover:opacity-80"
+                          style={{
+                            border: `1px solid ${C.border}`,
+                            color: C.text,
+                          }}
                         >
                           Perbaiki
                         </button>
                       </>
                     )}
-                    {status === "accepted" && (
-                      <span className="text-xs font-medium text-emerald-700 dark:text-emerald-400">
-                        Diterima
+                    {status === "dismissed" && (
+                      <span className="text-xs font-medium" style={{ color: C.muted }}>
+                        Isi manual di bawah
                       </span>
                     )}
-                    {status === "dismissed" && (
-                      <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-                        Isi manual di bawah
+                    {status === "pending" && !readable && (
+                      <span className="text-xs font-medium" style={{ color: C.muted }}>
+                        Tidak terbaca
                       </span>
                     )}
                   </div>

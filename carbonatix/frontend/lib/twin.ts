@@ -21,10 +21,18 @@
 import { toFraction, toPercent } from "./units";
 import {
   CAP_HELPER_RANGES,
+  SITE_SPEC_RANGES,
   validateFields,
   type FieldRange,
 } from "./onboarding";
-import type { Company, EmissionInput, EmissionResult, OperationalInput } from "@/types/emissions";
+import type {
+  Company,
+  CompanyInput,
+  EmissionInput,
+  EmissionResult,
+  OperationalInput,
+  ProductionMonthInputs,
+} from "@/types/emissions";
 
 export const NODE_ORDER = ["stockpile", "dryer", "kiln", "eaf", "pltu"] as const;
 export type NodeId = (typeof NODE_ORDER)[number];
@@ -60,11 +68,11 @@ export const NODE_FOR_FIELD: Record<keyof EmissionInput, NodeId> = {
  * so an in-progress or empty entry is never a stray `NaN`. Percentage
  * fields are held as percentages (0-100), matching what's rendered.
  *
- * Holds only the six daily operational levers. The three site-spec values
- * (`dryerThermalEfficiency`, `secEafKwhPerTAlloy`, `efCaptivePltu`) are
- * deliberately **not** here -- see `SiteSpecFieldDescriptor` below for why
- * they are read-only, sourced straight from the fetched `Company`, never
- * from editable form state. */
+ * Six daily operational levers plus three site-spec values. Site-spec edits
+ * are flushed to `PUT /company` before they affect preview/commit (see
+ * `buildCompanyInputFromTwin`); `buildEmissionInput` still reads those
+ * three from `Company` so the live preview cannot diverge from what
+ * `POST /runs` persists. */
 export interface TwinFormState {
   wetOreInputTons: string;
   moistureContentPercent: string;
@@ -72,7 +80,15 @@ export interface TwinFormState {
   reductantBiocokePercent: string;
   powerMixCaptiveCoalPercent: string;
   powerMixHydroGridPercent: string;
+  dryerThermalEfficiencyPercent: string;
+  secEafKwhPerTAlloy: string;
+  efCaptivePltu: string;
 }
+
+export type SiteSpecFormKey =
+  | "dryerThermalEfficiencyPercent"
+  | "secEafKwhPerTAlloy"
+  | "efCaptivePltu";
 
 export const EMPTY_TWIN_FORM: TwinFormState = {
   wetOreInputTons: "",
@@ -81,6 +97,9 @@ export const EMPTY_TWIN_FORM: TwinFormState = {
   reductantBiocokePercent: "",
   powerMixCaptiveCoalPercent: "",
   powerMixHydroGridPercent: "",
+  dryerThermalEfficiencyPercent: "",
+  secEafKwhPerTAlloy: "",
+  efCaptivePltu: "",
 };
 
 interface FieldDisplayMeta {
@@ -102,38 +121,24 @@ export interface OperationalFieldDescriptor extends FieldDisplayMeta {
 }
 
 /**
- * A site-spec value: `dryerThermalEfficiency`, `secEafKwhPerTAlloy` or
- * `efCaptivePltu`. Deliberately **read-only** on its node -- not merely
- * pre-filled-but-overridable.
- *
- * An earlier version of this panel let these three be edited, seeding them
- * from the company profile but allowing override. That was a trap: the
- * live `/emissions` preview used whatever the form held (including an
- * override), but `POST /runs` never sends these three fields at all --
- * `runs.commit` (`app/runs.py`) always reads them from the caller's stored
- * `companies` row. A user could watch `totalEmissions` change in response
- * to an override, approve that number, commit, and have a *different*
- * figure persisted -- the approved preview and the stored run silently
- * diverging. In a carbon-accounting product that is not a UI wrinkle.
- *
- * The fix is to remove the affordance rather than guard it (e.g. by
- * comparing the override against the company baseline and blocking commit
- * on drift): read-only means the preview is *always* exactly what gets
- * committed, by construction, with no comparison logic that could later
- * get out of sync itself. The value is still shown, with its unit, because
- * knowing what's currently driving a node's emissions is genuinely useful
- * -- it's just not editable here. Changing it means going to
- * `/onboarding` (`SITE_SPEC_EDIT_LABEL` below is the link text used for
- * that in `NodePanel`).
+ * A site-spec value editable on the twin. Edits live in `TwinFormState` and
+ * are persisted with `PUT /company` (`buildCompanyInputFromTwin`) before
+ * `buildEmissionInput` / `POST /runs` see them -- those paths still read
+ * only from the stored `Company`, so a mid-edit draft cannot make the
+ * preview disagree with the committed run.
  */
 export interface SiteSpecFieldDescriptor extends FieldDisplayMeta {
   kind: "siteSpec";
+  key: SiteSpecFormKey;
   companyKey: "dryerThermalEfficiency" | "secEafKwhPerTAlloy" | "efCaptivePltu";
+  range: FieldRange;
 }
 
 export type TwinFieldDescriptor = OperationalFieldDescriptor | SiteSpecFieldDescriptor;
 
 export const SITE_SPEC_EDIT_LABEL = "Ubah di profil perusahaan";
+export const SITE_SPEC_SAVE_HINT =
+  "Perubahan disimpan ke profil perusahaan agar pratinjau sama dengan hasil commit.";
 
 const STOCKPILE_FIELDS: TwinFieldDescriptor[] = [
   {
@@ -168,10 +173,12 @@ const STOCKPILE_FIELDS: TwinFieldDescriptor[] = [
 const DRYER_FIELDS: TwinFieldDescriptor[] = [
   {
     kind: "siteSpec",
+    key: "dryerThermalEfficiencyPercent",
     companyKey: "dryerThermalEfficiency",
     label: "Efisiensi termal dryer",
     unit: "%",
     isPercent: true,
+    range: SITE_SPEC_RANGES.dryerThermalEfficiencyPercent,
   },
 ];
 
@@ -190,10 +197,12 @@ const KILN_FIELDS: TwinFieldDescriptor[] = [
 const EAF_FIELDS: TwinFieldDescriptor[] = [
   {
     kind: "siteSpec",
+    key: "secEafKwhPerTAlloy",
     companyKey: "secEafKwhPerTAlloy",
     label: "Energi spesifik EAF",
     unit: "kWh/ton alloy",
     isPercent: false,
+    range: SITE_SPEC_RANGES.secEafKwhPerTAlloy,
   },
 ];
 
@@ -218,17 +227,19 @@ const PLTU_FIELDS: TwinFieldDescriptor[] = [
   },
   {
     kind: "siteSpec",
+    key: "efCaptivePltu",
     companyKey: "efCaptivePltu",
     label: "Faktor emisi PLTU captive",
     unit: "tCO2e/MWh",
     isPercent: false,
+    range: SITE_SPEC_RANGES.efCaptivePltu,
   },
 ];
 
 /** The field table from the task brief, expressed as data: every one of
  * the 9 inputs, grouped under the one node it belongs to. Six are
- * editable operational levers; three (dryer/EAF/PLTU's non-power-mix
- * field) are read-only site-spec values -- see `SiteSpecFieldDescriptor`. */
+ * daily operational levers; three are site-spec (editable here, persisted
+ * via `PUT /company`). */
 export const NODE_FIELDS: Record<NodeId, TwinFieldDescriptor[]> = {
   stockpile: STOCKPILE_FIELDS,
   dryer: DRYER_FIELDS,
@@ -237,10 +248,19 @@ export const NODE_FIELDS: Record<NodeId, TwinFieldDescriptor[]> = {
   pltu: PLTU_FIELDS,
 };
 
+/** True when the node has at least one daily operational lever. */
+export function nodeHasOperationalInput(node: NodeId): boolean {
+  return NODE_FIELDS[node].some((f) => f.kind === "operational");
+}
+
 const ALL_FIELDS: TwinFieldDescriptor[] = NODE_ORDER.flatMap((node) => NODE_FIELDS[node]);
 
 const OPERATIONAL_FIELDS: OperationalFieldDescriptor[] = ALL_FIELDS.filter(
   (f): f is OperationalFieldDescriptor => f.kind === "operational",
+);
+
+const SITE_SPEC_FIELDS: SiteSpecFieldDescriptor[] = ALL_FIELDS.filter(
+  (f): f is SiteSpecFieldDescriptor => f.kind === "siteSpec",
 );
 
 /** Candidate.field (snake_case, the OCR wire value) -> this form's field
@@ -292,11 +312,65 @@ export function validateTwinForm(form: TwinFormState): string | null {
   );
 }
 
-/** Formats a read-only site-spec field's current value for display on its
- * node -- e.g. "55%" or "2400 kWh/ton alloy" -- straight from the fetched
- * `Company`, never from form state (there is none for these three
- * fields). "%" glues to the number; every other unit reads as a separate
- * word, matching `lib/onboarding.ts`'s `validateRange` convention. */
+/** Seeds the three site-spec form strings from a fetched `Company`. */
+export function seedSiteSpecForm(company: Company): Pick<TwinFormState, SiteSpecFormKey> {
+  return {
+    dryerThermalEfficiencyPercent: String(toPercent(company.dryerThermalEfficiency)),
+    secEafKwhPerTAlloy: String(company.secEafKwhPerTAlloy),
+    efCaptivePltu: String(company.efCaptivePltu),
+  };
+}
+
+/** Client-side range check for the three twin site-spec inputs. */
+export function validateSiteSpecTwinForm(form: TwinFormState): string | null {
+  return validateFields(
+    SITE_SPEC_FIELDS.map(
+      (f) => [toNumber(form[f.key]), f.range] as [number, FieldRange],
+    ),
+  );
+}
+
+/** True when the form's site-spec strings match the stored company
+ * (numeric compare so "55" vs "55.0" is not treated as dirty). */
+export function siteSpecMatchesCompany(form: TwinFormState, company: Company): boolean {
+  const dryer = toNumber(form.dryerThermalEfficiencyPercent);
+  const sec = toNumber(form.secEafKwhPerTAlloy);
+  const ef = toNumber(form.efCaptivePltu);
+  if (![dryer, sec, ef].every(Number.isFinite)) return false;
+  return (
+    Math.abs(toFraction(dryer) - company.dryerThermalEfficiency) < 1e-9 &&
+    Math.abs(sec - company.secEafKwhPerTAlloy) < 1e-9 &&
+    Math.abs(ef - company.efCaptivePltu) < 1e-9
+  );
+}
+
+/** Full `PUT /company` payload: edited twin site-spec + unchanged company
+ * identity / alloy / kiln / cap fields. */
+export function buildCompanyInputFromTwin(
+  form: TwinFormState,
+  company: Company,
+): CompanyInput {
+  return {
+    name: company.name,
+    technology: company.technology,
+    efCaptivePltu: toNumber(form.efCaptivePltu),
+    dryerThermalEfficiency: toFraction(toNumber(form.dryerThermalEfficiencyPercent)),
+    secEafKwhPerTAlloy: toNumber(form.secEafKwhPerTAlloy),
+    alloyNickelGrade: company.alloyNickelGrade,
+    kilnThermalEfficiency: company.kilnThermalEfficiency,
+    capTco2e: company.capTco2e,
+  };
+}
+
+/** Local `Company` after a successful site-spec save (mirrors the PUT body). */
+export function applySiteSpecFormToCompany(
+  form: TwinFormState,
+  company: Company,
+): Company {
+  return buildCompanyInputFromTwin(form, company);
+}
+
+/** Formats a site-spec field from company for display helpers/tests. */
 export function formatSiteSpecValue(field: SiteSpecFieldDescriptor, company: Company): string {
   const raw = company[field.companyKey];
   const displayNumber = field.isPercent ? toPercent(raw) : raw;
@@ -305,19 +379,10 @@ export function formatSiteSpecValue(field: SiteSpecFieldDescriptor, company: Com
   return `${formatted}${unitSuffix}`;
 }
 
-/** Builds the `POST /emissions` payload. The six operational levers come
- * from the twin's editable form state (throws `RangeError` via
- * `toFraction` if a percentage field is out of [0, 100] or non-finite --
- * callers must catch this themselves and must never render `err.message`
- * verbatim, see `lib/units.ts`'s docstring and `app/onboarding/page.tsx`'s
- * `describeError`; callers should run `validateTwinForm` first so this
- * throw path is reached only for a value the range table didn't
- * anticipate). The three site-spec fields come **only** from `company` --
- * never from form state, because there is none for them -- which is what
- * makes this payload and `POST /runs`'s persisted calculation
- * (`runs.commit` reads the same three fields from the same stored company
- * row) provably identical rather than something that has to be kept in
- * sync by hand. */
+/** Builds the `POST /emissions` payload. Operational levers come from the
+ * twin form; the three site-spec fields come **only** from `company`
+ * (after `PUT /company` has flushed form edits). That keeps this payload
+ * identical to what `runs.commit` will compute from the stored row. */
 export function buildEmissionInput(form: TwinFormState, company: Company): EmissionInput {
   return {
     wetOreInputTons: toNumber(form.wetOreInputTons),
@@ -333,11 +398,7 @@ export function buildEmissionInput(form: TwinFormState, company: Company): Emiss
 }
 
 /** Builds the `POST /runs` payload -- the six daily operational levers
- * only. The three site-spec fields shown on the dryer, EAF and PLTU nodes
- * are never part of this payload, and (now that they're read-only) could
- * not be even if this function wanted them to be: the backend's
- * `runs.commit` reads them from the caller's stored company profile, not
- * from the request body (see `OperationalRequest` in `schemas.py`). */
+ * only. Site-spec is read server-side from the stored company profile. */
 export function buildOperationalInput(form: TwinFormState): OperationalInput {
   return {
     wetOreInputTons: toNumber(form.wetOreInputTons),
@@ -347,6 +408,65 @@ export function buildOperationalInput(form: TwinFormState): OperationalInput {
     powerMixCaptiveCoal: toFraction(toNumber(form.powerMixCaptiveCoalPercent)),
     powerMixHydroGrid: toFraction(toNumber(form.powerMixHydroGridPercent)),
   };
+}
+
+type OperationalFormKey =
+  | "wetOreInputTons"
+  | "moistureContentPercent"
+  | "nickelGradePercent"
+  | "reductantBiocokePercent"
+  | "powerMixCaptiveCoalPercent"
+  | "powerMixHydroGridPercent";
+
+/** Maps a stored production-month draft (fractions) onto twin form strings
+ * (percentages for `*Pct` / power-mix fields). Missing keys stay blank. */
+export function hydrateOperationalFormFromInputs(
+  inputs: ProductionMonthInputs,
+): Pick<TwinFormState, OperationalFormKey> {
+  const pct = (fraction: number | undefined): string => {
+    if (fraction === undefined || !Number.isFinite(fraction)) return "";
+    return String(toPercent(fraction));
+  };
+  const tons = (value: number | undefined): string => {
+    if (value === undefined || !Number.isFinite(value)) return "";
+    return String(value);
+  };
+  return {
+    wetOreInputTons: tons(inputs.wetOreInputTons),
+    moistureContentPercent: pct(inputs.moistureContentPct),
+    nickelGradePercent: pct(inputs.nickelGradePct),
+    reductantBiocokePercent: pct(inputs.reductantBiocokePct),
+    powerMixCaptiveCoalPercent: pct(inputs.powerMixCaptiveCoal),
+    powerMixHydroGridPercent: pct(inputs.powerMixHydroGrid),
+  };
+}
+
+/** Partial draft for autosave. Only finite, in-range fields are included so
+ * mid-edit incomplete mixes survive without failing the PUT. */
+export function buildPartialProductionMonthInputs(
+  form: TwinFormState,
+): ProductionMonthInputs {
+  const out: ProductionMonthInputs = {};
+  const wet = toNumber(form.wetOreInputTons);
+  if (Number.isFinite(wet) && wet >= 0) out.wetOreInputTons = wet;
+
+  const tryPct = (raw: string): number | undefined => {
+    const n = toNumber(raw);
+    if (!Number.isFinite(n) || n < 0 || n > 100) return undefined;
+    return toFraction(n);
+  };
+
+  const moisture = tryPct(form.moistureContentPercent);
+  if (moisture !== undefined) out.moistureContentPct = moisture;
+  const nickel = tryPct(form.nickelGradePercent);
+  if (nickel !== undefined) out.nickelGradePct = nickel;
+  const biocoke = tryPct(form.reductantBiocokePercent);
+  if (biocoke !== undefined) out.reductantBiocokePct = biocoke;
+  const captive = tryPct(form.powerMixCaptiveCoalPercent);
+  if (captive !== undefined) out.powerMixCaptiveCoal = captive;
+  const hydro = tryPct(form.powerMixHydroGridPercent);
+  if (hydro !== undefined) out.powerMixHydroGrid = hydro;
+  return out;
 }
 
 /** The power-mix remainder: the hydro/grid share never enters the emission
