@@ -11,7 +11,12 @@ from fastapi.testclient import TestClient
 from app.auth import current_user_id
 from app.ingestion.document_vision import Element, ExtractionFailed, ParsedDocument
 from app.ingestion.interpret import FieldReading
-from app.ingestion.mapping import NODE_FOR_FIELD, Candidate, readings_to_candidates
+from app.ingestion.mapping import (
+    FIELDS_BY_PROFILE,
+    NODE_FOR_FIELD,
+    Candidate,
+    readings_to_candidates,
+)
 from app.main import app, post_document
 from app.schemas import CandidateResponse, DocumentExtractionResponse
 
@@ -38,7 +43,7 @@ def _current_user():
 def test_every_operational_field_maps_to_exactly_one_node():
     """Each of the nine inputs belongs to exactly one twin node (PRD 13.1).
     A field with no node cannot be entered; a field in two nodes is
-    ambiguous."""
+    ambiguous. Onboarding-only site fields map to node "onboarding"."""
     operational = {
         "wet_ore_input_tons",
         "moisture_content_pct",
@@ -51,10 +56,18 @@ def test_every_operational_field_maps_to_exactly_one_node():
         "ef_captive_pltu",
         "dryer_thermal_efficiency",
         "sec_eaf_kwh_per_t_alloy",
+        "alloy_nickel_grade",
+        "kiln_thermal_efficiency",
+        "cap_tco2e",
     }
+    assert set(FIELDS_BY_PROFILE["site_spec"]) == site_spec
     for field in operational | site_spec:
         assert field in NODE_FOR_FIELD, f"{field} has no twin node"
         assert isinstance(NODE_FOR_FIELD[field], str)
+
+    assert NODE_FOR_FIELD["alloy_nickel_grade"] == "onboarding"
+    assert NODE_FOR_FIELD["kiln_thermal_efficiency"] == "onboarding"
+    assert NODE_FOR_FIELD["cap_tco2e"] == "onboarding"
 
     # Ambiguity check: every field maps to exactly one node, never two --
     # there is no way to express "belongs to two nodes" in a dict value, so

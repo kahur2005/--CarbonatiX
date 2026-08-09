@@ -1,6 +1,9 @@
 # SDD scratch workspace
 .superpowers/
 
+# Local UI reference clones (not part of the product tree)
+refs/
+
 # Python
 __pycache__/
 *.py[cod]

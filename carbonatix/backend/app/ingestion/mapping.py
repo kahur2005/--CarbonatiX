@@ -1,10 +1,9 @@
 """Map verified field readings onto twin-node candidates.
 
-A candidate is never a value. The user accepts or corrects every one,
-because the difference between OCR that speeds up data entry and OCR that
-silently fabricates a plant's carbon footprint is exactly this step: there
-is no "accepted" field on `Candidate` and no function anywhere in this
-package that writes a candidate into a company profile or a run.
+A candidate is never a persisted value. Upload may auto-fill parent form
+state on the client, but nothing in this package writes a candidate into
+`companies` or `calculation_runs` — that still requires an explicit save
+or commit. There is no `accepted` field on `Candidate`.
 """
 
 from dataclasses import dataclass
@@ -32,6 +31,10 @@ NODE_FOR_FIELD: dict[str, str] = {
     "power_mix_captive_coal": "pltu",
     "power_mix_hydro_grid": "pltu",
     "ef_captive_pltu": "pltu",
+    # Onboarding form fields with no twin panel; twin NodePanel ignores them.
+    "alloy_nickel_grade": "onboarding",
+    "kiln_thermal_efficiency": "onboarding",
+    "cap_tco2e": "onboarding",
 }
 
 # Single source of truth for which fields belong to which document profile.
@@ -51,6 +54,9 @@ FIELDS_BY_PROFILE: dict[str, list[str]] = {
         "ef_captive_pltu",
         "dryer_thermal_efficiency",
         "sec_eaf_kwh_per_t_alloy",
+        "alloy_nickel_grade",
+        "kiln_thermal_efficiency",
+        "cap_tco2e",
     ],
 }
 
@@ -63,6 +69,8 @@ _FRACTION_FIELDS = frozenset(
         "power_mix_captive_coal",
         "power_mix_hydro_grid",
         "dryer_thermal_efficiency",
+        "alloy_nickel_grade",
+        "kiln_thermal_efficiency",
     }
 )
 

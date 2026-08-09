@@ -3,9 +3,7 @@
 import {
   ALL_DRIVER_STAGES,
   DRIVER_GROUPS,
-  formatIntensity,
   formatTco2e,
-  INTENSITY_NULL_TOOLTIP,
   stageValue,
 } from "@/lib/dashboard";
 import type { EmissionResult } from "@/types/emissions";
@@ -20,56 +18,10 @@ const CARD_CLASS =
   "rounded-lg border border-black/[.08] bg-[var(--chart-surface)] p-4 dark:border-white/[.145]";
 
 /**
- * A stat value with an optional attached tooltip -- used for the
- * `intensityPerTonneNi === null` case, where the em dash on screen needs an
- * explanation reachable by hover *and* keyboard focus. The tooltip text
- * itself is always in the DOM (visibility is CSS-only), so it's reachable
- * without hovering too -- consistent with the "tooltips enhance, never
- * gate" rule.
- */
-function StatTile({
-  label,
-  value,
-  tooltip,
-}: {
-  label: string;
-  value: string;
-  tooltip?: string;
-}) {
-  return (
-    <div className={CARD_CLASS}>
-      <p className="text-xs font-medium uppercase tracking-wide text-[var(--chart-muted)]">
-        {label}
-      </p>
-      <div className="group relative mt-1 inline-flex items-baseline gap-1.5">
-        <p className="text-2xl font-semibold text-[var(--chart-text-primary)]">{value}</p>
-        {tooltip && (
-          <>
-            <span
-              tabIndex={0}
-              aria-label={tooltip}
-              className="cursor-help text-sm text-[var(--chart-muted)]"
-            >
-              (?)
-            </span>
-            <span
-              role="tooltip"
-              className="pointer-events-none absolute bottom-full left-0 z-10 mb-1 hidden w-56 rounded bg-black px-2 py-1 text-xs font-normal text-white group-hover:block group-focus-within:block dark:bg-zinc-800"
-            >
-              {tooltip}
-            </span>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/**
  * Driver bars (grouped into the two clusters the task brief calls for --
  * see `lib/dashboard.ts`'s `DRIVER_GROUPS` docstring for why a flat
- * four-bar row would lose the story), the Scope 1/2 split, and the
- * total/intensity pair that must never be shown one without the other.
+ * four-bar row would lose the story) and the Scope 1/2 split.
+ * Total emissions and intensity live in `KpiBar` only — not duplicated here.
  */
 export default function EmissionBars({ result }: EmissionBarsProps) {
   const maxStageValue = Math.max(0, ...ALL_DRIVER_STAGES.map((s) => stageValue(result, s.key)));
@@ -79,20 +31,17 @@ export default function EmissionBars({ result }: EmissionBarsProps) {
 
   return (
     <div className="viz-root flex flex-col gap-6">
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <StatTile label="Total emisi" value={formatTco2e(result.totalEmissions)} />
-        <StatTile
-          label="Intensitas per ton Ni"
-          value={formatIntensity(result.intensityPerTonneNi)}
-          tooltip={result.intensityPerTonneNi === null ? INTENSITY_NULL_TOOLTIP : undefined}
-        />
-      </div>
-
       <div>
-        <h3 className="text-sm font-semibold text-[var(--chart-text-primary)]">
+        <h3
+          className="text-sm font-semibold text-[var(--chart-text-primary)]"
+          style={{ fontFamily: "var(--font-display), sans-serif" }}
+        >
           Emisi per tahap proses
         </h3>
-        <p className="text-xs text-[var(--chart-text-secondary)]">
+        <p
+          className="text-xs text-[var(--chart-text-secondary)]"
+          style={{ fontFamily: "var(--font-body), sans-serif" }}
+        >
           Dikelompokkan menurut pemicunya -- bijih atau nikel.
         </p>
         <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -153,7 +102,10 @@ export default function EmissionBars({ result }: EmissionBarsProps) {
       </div>
 
       <div>
-        <h3 className="text-sm font-semibold text-[var(--chart-text-primary)]">
+        <h3
+          className="text-sm font-semibold text-[var(--chart-text-primary)]"
+          style={{ fontFamily: "var(--font-display), sans-serif" }}
+        >
           Scope 1 vs Scope 2
         </h3>
         <div

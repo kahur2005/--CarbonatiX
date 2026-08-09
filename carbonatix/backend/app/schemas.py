@@ -146,12 +146,38 @@ class SuggestCapRequest(OperationalRequest):
     reduction_target: float = Field(ge=0, lt=1, allow_inf_nan=False)
 
 
+class CommitRunRequest(OperationalRequest):
+    """Operational levers plus optional production month (`YYYY-MM`)."""
+
+    period: str | None = None
+
+
 class RunResponse(_Camel):
     id: str
     result: EmissionResponse
     compliance: CompliancePositionResponse
     forecast_snapshot: dict
     created_at: str
+    # First-of-month stamp when the twin committed with a selected period.
+    period: str | None = None
+
+
+class ProductionMonthSummary(_Camel):
+    period: str
+    updated_at: str
+    has_inputs: bool
+
+
+class ProductionMonthResponse(_Camel):
+    period: str
+    inputs: dict
+    updated_at: str
+
+
+class ProductionMonthPutRequest(_Camel):
+    """Partial operational draft. Missing keys leave twin fields blank."""
+
+    inputs: dict = Field(default_factory=dict)
 
 
 class CandidateResponse(_Camel):

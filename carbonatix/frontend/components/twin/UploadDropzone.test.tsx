@@ -8,12 +8,9 @@ import type { DocumentExtractionResult } from "@/types/emissions";
 const EMPTY_GUIDANCE =
   "Dokumen berhasil dibaca, tetapi tidak ada medan yang dicari ditemukan di dalamnya. Masukkan nilai secara manual.";
 
-// `UploadDropzone` is shared between onboarding (Task 16) and every one of
-// the twin's five node panels (Task 17); it implements the one rule that
-// matters most in the whole ingestion pipeline -- "a candidate never
-// populates a field without an explicit click" -- and until now was
-// verified only by reading the code. These tests are that component's
-// first DOM-level coverage.
+// `UploadDropzone` is shared between onboarding and every twin node panel.
+// Upload is the explicit user action: readable candidates auto-fill form
+// state; nulls stay blank; nothing writes the DB from this component.
 vi.mock("@/lib/api", () => ({
   postDocument: vi.fn(),
 }));
@@ -40,7 +37,7 @@ describe("UploadDropzone", () => {
     vi.mocked(postDocument).mockReset();
   });
 
-  it('an unreadable candidate (value === null) renders "Tidak terbaca" and offers no accept control', async () => {
+  it('an unreadable candidate (value === null) renders "Tidak terbaca" and does not call onAccept', async () => {
     const result: DocumentExtractionResult = {
       candidates: [
         {
@@ -64,16 +61,57 @@ describe("UploadDropzone", () => {
 
     await uploadDummyFile(container);
 
-    // Both the value display and the readability badge read "Tidak
-    // terbaca" for a null candidate -- there is nothing to accept.
     const readings = await waitFor(() => screen.getAllByText("Tidak terbaca"));
-    expect(readings).toHaveLength(2);
+    expect(readings.length).toBeGreaterThanOrEqual(2);
     expect(screen.queryByRole("button", { name: "Terima" })).not.toBeInTheDocument();
     expect(onAccept).not.toHaveBeenCalled();
   });
 
-  it('clicking "Terima" populates the field exactly once, only in direct response to the click', async () => {
+  it("auto-applies readable candidates after upload; nulls do not call onAccept", async () => {
     const result: DocumentExtractionResult = {
+      candidates: [
+        {
+          field: "moisture_content_pct",
+          value: 0.32,
+          confidence: 0.75,
+          node: "stockpile",
+          sourceHint: "",
+          basis: "transcribed",
+          evidence: "Kadar air 32%",
+          derivation: "",
+        },
+        {
+          field: "wet_ore_input_tons",
+          value: null,
+          confidence: 0,
+          node: "stockpile",
+          sourceHint: "",
+          basis: null,
+          evidence: "",
+          derivation: "",
+        },
+      ],
+      confidenceIsPlaceholder: true,
+    };
+    vi.mocked(postDocument).mockResolvedValue(result);
+    const onAccept = vi.fn();
+    const { container } = render(
+      <UploadDropzone profile="operational" fieldLabels={FIELD_LABELS} onAccept={onAccept} />,
+    );
+
+    await uploadDummyFile(container);
+
+    await waitFor(() => {
+      expect(onAccept).toHaveBeenCalledTimes(1);
+    });
+    expect(onAccept).toHaveBeenCalledWith("moisture_content_pct", 32);
+    expect(screen.queryByRole("button", { name: "Terima" })).not.toBeInTheDocument();
+    expect(screen.getByText("Diterima")).toBeInTheDocument();
+    expect(screen.getAllByText("Tidak terbaca").length).toBeGreaterThan(0);
+  });
+
+  it('Perbaiki clears the field via onClear and shows manual-entry status', async () => {
+    vi.mocked(postDocument).mockResolvedValue({
       candidates: [
         {
           field: "moisture_content_pct",
@@ -87,30 +125,24 @@ describe("UploadDropzone", () => {
         },
       ],
       confidenceIsPlaceholder: true,
-    };
-    vi.mocked(postDocument).mockResolvedValue(result);
+    });
     const onAccept = vi.fn();
+    const onClear = vi.fn();
     const { container } = render(
-      <UploadDropzone profile="operational" fieldLabels={FIELD_LABELS} onAccept={onAccept} />,
+      <UploadDropzone
+        profile="operational"
+        fieldLabels={FIELD_LABELS}
+        onAccept={onAccept}
+        onClear={onClear}
+      />,
     );
 
     const user = await uploadDummyFile(container);
+    await waitFor(() => expect(onAccept).toHaveBeenCalledTimes(1));
 
-    const acceptButton = await screen.findByRole("button", { name: "Terima" });
-    // The candidate was returned and rendered, but onAccept must not have
-    // fired yet -- only the click below may trigger it.
-    expect(onAccept).not.toHaveBeenCalled();
-
-    await user.click(acceptButton);
-
-    expect(onAccept).toHaveBeenCalledTimes(1);
-    expect(onAccept).toHaveBeenCalledWith("moisture_content_pct", 32);
-
-    // A second render pass (e.g. a re-render from unrelated state) must not
-    // re-fire it: the button is gone, replaced by a static "Diterima" label.
-    expect(screen.queryByRole("button", { name: "Terima" })).not.toBeInTheDocument();
-    expect(screen.getByText("Diterima")).toBeInTheDocument();
-    expect(onAccept).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "Perbaiki" }));
+    expect(onClear).toHaveBeenCalledWith("moisture_content_pct");
+    expect(screen.getByText("Isi manual di bawah")).toBeInTheDocument();
   });
 
   it('labels a derived candidate with "Dihitung, bukan dibaca" and shows its exact derivation', async () => {

@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   buildEmissionInput,
   buildOperationalInput,
+  buildPartialProductionMonthInputs,
   EMPTY_TWIN_FORM,
   formatSiteSpecValue,
+  hydrateOperationalFormFromInputs,
   NODE_FIELDS,
   NODE_FOR_FIELD,
   NODE_ORDER,
@@ -62,7 +64,7 @@ describe("NODE_FOR_FIELD matches app/ingestion/mapping.py exactly", () => {
     }
   });
 
-  it("exactly three fields are read-only site-spec values, the rest are editable operational levers", () => {
+  it("exactly three fields are site-spec values, the rest are editable operational levers", () => {
     const allFields = NODE_ORDER.flatMap((node) => NODE_FIELDS[node]);
     const siteSpecKeys = allFields
       .filter((f) => f.kind === "siteSpec")
@@ -80,6 +82,9 @@ const OPERATIONAL_FORM: TwinFormState = {
   reductantBiocokePercent: "8",
   powerMixCaptiveCoalPercent: "70",
   powerMixHydroGridPercent: "30",
+  dryerThermalEfficiencyPercent: "55",
+  secEafKwhPerTAlloy: "2400",
+  efCaptivePltu: "1",
 };
 
 const COMPANY_A: Company = {
@@ -136,16 +141,23 @@ describe("buildEmissionInput sources site-spec fields only from Company -- never
     expect(resultB.moistureContentPct).toBe(resultA.moistureContentPct);
   });
 
-  it("TwinFormState has no key for any of the three site-spec fields -- a user-entered override cannot reach this payload because there is nowhere in the editable form to enter one", () => {
-    // Type-level guarantee, asserted at runtime too: none of the three
-    // wire field names this function reads from `company` exist as
-    // TwinFormState keys.
+  it("site-spec form keys exist for UI editing, but buildEmissionInput still reads those three from Company only", () => {
+    // Form holds display strings for the twin panel; the emissions payload
+    // must still come from the stored company (what POST /runs uses).
     const formKeys = Object.keys(EMPTY_TWIN_FORM);
-    expect(formKeys).not.toContain("dryerThermalEfficiency");
-    expect(formKeys).not.toContain("dryerThermalEfficiencyPercent");
-    expect(formKeys).not.toContain("secEafKwhPerTAlloy");
-    expect(formKeys).not.toContain("efCaptivePltu");
-    expect(formKeys).toHaveLength(6);
+    expect(formKeys).toContain("dryerThermalEfficiencyPercent");
+    expect(formKeys).toContain("secEafKwhPerTAlloy");
+    expect(formKeys).toContain("efCaptivePltu");
+    const drifted: TwinFormState = {
+      ...OPERATIONAL_FORM,
+      dryerThermalEfficiencyPercent: "99",
+      secEafKwhPerTAlloy: "9999",
+      efCaptivePltu: "9",
+    };
+    const result = buildEmissionInput(drifted, COMPANY_A);
+    expect(result.dryerThermalEfficiency).toBe(COMPANY_A.dryerThermalEfficiency);
+    expect(result.secEafKwhPerTAlloy).toBe(COMPANY_A.secEafKwhPerTAlloy);
+    expect(result.efCaptivePltu).toBe(COMPANY_A.efCaptivePltu);
   });
 
   it("throws RangeError (never returns) on an out-of-range operational percentage", () => {
@@ -177,20 +189,12 @@ describe("buildOperationalInput", () => {
 });
 
 describe("formatSiteSpecValue", () => {
-  const dryerField: SiteSpecFieldDescriptor = {
-    kind: "siteSpec",
-    companyKey: "dryerThermalEfficiency",
-    label: "Efisiensi termal dryer",
-    unit: "%",
-    isPercent: true,
-  };
-  const eafField: SiteSpecFieldDescriptor = {
-    kind: "siteSpec",
-    companyKey: "secEafKwhPerTAlloy",
-    label: "Energi spesifik EAF",
-    unit: "kWh/ton alloy",
-    isPercent: false,
-  };
+  const dryerField: SiteSpecFieldDescriptor = NODE_FIELDS.dryer.find(
+    (f): f is SiteSpecFieldDescriptor => f.kind === "siteSpec",
+  )!;
+  const eafField: SiteSpecFieldDescriptor = NODE_FIELDS.eaf.find(
+    (f): f is SiteSpecFieldDescriptor => f.kind === "siteSpec",
+  )!;
 
   it("converts a fraction to a percentage and glues the % sign", () => {
     expect(formatSiteSpecValue(dryerField, COMPANY_A)).toBe("55%");
@@ -367,5 +371,35 @@ describe("parseEmissionError", () => {
 
   it("is null for a network-failure Error (no detail body at all)", () => {
     expect(parseEmissionError(new TypeError("Failed to fetch"))).toBeNull();
+  });
+});
+
+describe("production-month hydrate and partial draft", () => {
+  it("hydrates fractions into percent form strings and blanks missing keys", () => {
+    const form = hydrateOperationalFormFromInputs({
+      wetOreInputTons: 9000,
+      moistureContentPct: 0.32,
+      powerMixCaptiveCoal: 0.7,
+    });
+    expect(form.wetOreInputTons).toBe("9000");
+    expect(form.moistureContentPercent).toBe("32");
+    expect(form.powerMixCaptiveCoalPercent).toBe("70");
+    expect(form.nickelGradePercent).toBe("");
+    expect(form.powerMixHydroGridPercent).toBe("");
+  });
+
+  it("builds a partial PUT payload, skipping blank and out-of-range fields", () => {
+    const partial = buildPartialProductionMonthInputs({
+      ...EMPTY_TWIN_FORM,
+      wetOreInputTons: "5000",
+      moistureContentPercent: "30",
+      powerMixCaptiveCoalPercent: "40",
+      // hydro left blank — incomplete mix must still autosave
+    });
+    expect(partial).toEqual({
+      wetOreInputTons: 5000,
+      moistureContentPct: 0.3,
+      powerMixCaptiveCoal: 0.4,
+    });
   });
 });

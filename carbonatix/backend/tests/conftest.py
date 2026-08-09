@@ -13,14 +13,17 @@ combined `user_id` with `or` instead of `and` -- still passing the correct
 arguments, and therefore invisible to an argument-only check -- would leak
 in real Postgres while this fake kept reporting isolation as intact.
 `_assert_tenant_scoped` below closes that gap by inspecting the query text
-itself for every query against `companies` or `calculation_runs`. It is a
-shape check, not a SQL parser: it cannot verify a query's logic is
-*otherwise* correct, only that it is not structurally incapable of
-isolating tenants. A real end-to-end test against Postgres (Task 20)
-remains the only true backstop for SQL semantics this fake cannot model.
+itself for every query against `companies`, `calculation_runs`, or
+`production_months`. It is a shape check, not a SQL parser: it cannot
+verify a query's logic is *otherwise* correct, only that it is not
+structurally incapable of isolating tenants. A real end-to-end test against
+Postgres (Task 20) remains the only true backstop for SQL semantics this
+fake cannot model.
 """
 
+import json
 import uuid
+from datetime import datetime
 
 import pytest
 
@@ -28,8 +31,8 @@ from app import db
 
 
 def _assert_tenant_scoped(query: str) -> None:
-    """Refuse to fake-serve a query against companies/calculation_runs
-    unless its own text scopes it by user_id.
+    """Refuse to fake-serve a query against tenant tables unless its own
+    text scopes it by user_id.
 
     Generic by design -- a rule about the *shape* a user-scoped query must
     have, not a hardcoded list of expected SQL strings (which would break on
@@ -38,7 +41,8 @@ def _assert_tenant_scoped(query: str) -> None:
     q = " ".join(query.lower().split())
     is_companies = "public.companies" in q
     is_runs = "public.calculation_runs" in q
-    if not (is_companies or is_runs):
+    is_months = "public.production_months" in q
+    if not (is_companies or is_runs or is_months):
         return
 
     if q.startswith("insert"):
@@ -50,6 +54,10 @@ def _assert_tenant_scoped(query: str) -> None:
         if is_companies and "on conflict (user_id)" not in q:
             raise AssertionError(
                 f"companies upsert is not scoped to a single user_id row: {query!r}"
+            )
+        if is_months and "on conflict (user_id, period)" not in q:
+            raise AssertionError(
+                f"production_months upsert is not scoped to (user_id, period): {query!r}"
             )
         return
 
@@ -66,6 +74,7 @@ def _assert_tenant_scoped(query: str) -> None:
 def fake_db(monkeypatch):
     companies: dict[uuid.UUID, dict] = {}
     runs: dict[uuid.UUID, dict] = {}
+    months: dict[tuple[uuid.UUID, object], dict] = {}
 
     async def fake_fetchrow(query, *args):
         _assert_tenant_scoped(query)
@@ -74,7 +83,19 @@ def fake_db(monkeypatch):
         if "from public.calculation_runs" in query:
             row = runs.get(args[0])
             return row if row and row["user_id"] == args[1] else None
+        if "from public.production_months" in query:
+            # get_month: where user_id = $1 and period = $2
+            return months.get((args[0], args[1]))
         return None
+
+    async def fake_fetch(query, *args):
+        _assert_tenant_scoped(query)
+        if "from public.production_months" in query:
+            user_id = args[0]
+            rows = [row for (uid, _), row in months.items() if uid == user_id]
+            rows.sort(key=lambda r: r["period"], reverse=True)
+            return rows
+        return []
 
     async def fake_execute(query, *args):
         _assert_tenant_scoped(query)
@@ -101,9 +122,24 @@ def fake_db(monkeypatch):
                 "compliance": args[5],
                 "forecast_snapshot": args[6],
                 "created_at": args[7],
+                "period": args[8] if len(args) > 8 else None,
+            }
+        elif "insert into public.production_months" in query:
+            # (user_id, company_id, period, inputs, updated_at)
+            user_id, company_id, period, inputs_json, updated_at = args[:5]
+            inputs = json.loads(inputs_json) if isinstance(inputs_json, str) else inputs_json
+            months[(user_id, period)] = {
+                "user_id": user_id,
+                "company_id": company_id,
+                "period": period,
+                "inputs": inputs,
+                "updated_at": updated_at
+                if isinstance(updated_at, datetime)
+                else datetime.fromisoformat(str(updated_at).replace("Z", "+00:00")),
             }
         return "OK"
 
     monkeypatch.setattr(db, "fetchrow", fake_fetchrow)
+    monkeypatch.setattr(db, "fetch", fake_fetch)
     monkeypatch.setattr(db, "execute", fake_execute)
     yield

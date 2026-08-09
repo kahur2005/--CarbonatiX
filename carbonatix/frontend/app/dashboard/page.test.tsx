@@ -1,10 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import type { ReactElement } from "react";
 import DashboardPage from "./page";
+import { PeriodProvider } from "@/components/shell/PeriodProvider";
+import { ThemeProvider } from "@/components/shell/ThemeProvider";
 import { getRun, RunNotFoundError, streamRecommendation } from "@/lib/api";
 import { PTBAE_DISCLOSURE, STANDING_DISCLOSURES, SYNTHETIC_PRICE_LABEL } from "@/lib/dashboard";
 import { RECOMMENDATION_UNAVAILABLE_MESSAGE } from "@/components/advisor/RecommendationPanel";
 import type { RecommendationEvent, RunResult } from "@/types/emissions";
+
+function renderDash(ui: ReactElement = <DashboardPage />) {
+  return render(
+    <ThemeProvider>
+      <PeriodProvider>{ui}</PeriodProvider>
+    </ThemeProvider>,
+  );
+}
 
 vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
@@ -12,8 +23,14 @@ vi.mock("@/lib/api", async () => {
     ...actual,
     getRun: vi.fn(),
     streamRecommendation: vi.fn(),
+    listProductionMonths: vi.fn().mockResolvedValue([]),
+    getCompany: vi.fn().mockRejectedValue(new Error("no company in test")),
   };
 });
+
+vi.mock("@/components/shell/MonthPicker", () => ({
+  default: () => null,
+}));
 
 const STAGES = ["retrieve", "assemble", "synthesise", "verify"] as const;
 
@@ -51,6 +68,8 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => ({
     get: (key: string) => (key === "run" ? currentRunParam : null),
   }),
+  usePathname: () => "/dashboard",
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
 }));
 
 const RUN: RunResult = {
@@ -95,6 +114,7 @@ const RUN: RunResult = {
     },
   },
   createdAt: "2026-08-05T00:00:00Z",
+  period: "2025-02",
 };
 
 describe("DashboardPage", () => {
@@ -112,10 +132,12 @@ describe("DashboardPage", () => {
 
   it("loads the run from ?run= and renders its results, disclosures, and synthetic-price labels", async () => {
     vi.mocked(getRun).mockResolvedValue(RUN);
-    render(<DashboardPage />);
+    renderDash();
 
     await waitFor(() => expect(getRun).toHaveBeenCalledWith("run-123"));
     await screen.findByText(PTBAE_DISCLOSURE);
+    expect(screen.getByText(/Periode produksi:/)).toBeInTheDocument();
+    expect(screen.getByText("Februari 2025")).toBeInTheDocument();
 
     // Standing disclosures footer is always in the document.
     expect(screen.getByText(STANDING_DISCLOSURES)).toBeInTheDocument();
@@ -127,21 +149,21 @@ describe("DashboardPage", () => {
 
   it('shows "no run selected" when the URL has no ?run= param, without calling the API', () => {
     currentRunParam = null;
-    render(<DashboardPage />);
+    renderDash();
     expect(screen.getByText(/Tidak ada perhitungan yang dipilih/)).toBeInTheDocument();
     expect(getRun).not.toHaveBeenCalled();
   });
 
   it("shows a fixed Indonesian message for a missing run, never a raw error body", async () => {
     vi.mocked(getRun).mockRejectedValue(new RunNotFoundError('{"detail":"Run not found"}'));
-    render(<DashboardPage />);
+    renderDash();
     await screen.findByText(/Perhitungan tidak ditemukan/);
     expect(screen.queryByText(/detail/)).not.toBeInTheDocument();
   });
 
   it("shows a fixed Indonesian message on a generic failure, never the raw exception text", async () => {
     vi.mocked(getRun).mockRejectedValue(new TypeError("Failed to fetch"));
-    render(<DashboardPage />);
+    renderDash();
     await screen.findByText(/Gagal memuat data dashboard/);
     expect(screen.queryByText(/Failed to fetch/)).not.toBeInTheDocument();
   });
@@ -169,7 +191,7 @@ describe("DashboardPage", () => {
         ]),
       );
 
-      render(<DashboardPage />);
+      renderDash();
 
       await waitFor(() => {
         for (const stage of STAGES) {
@@ -203,7 +225,7 @@ describe("DashboardPage", () => {
         ]),
       );
 
-      render(<DashboardPage />);
+      renderDash();
 
       await screen.findByTestId("recommendation-unavailable");
       expect(screen.getByTestId("recommendation-unavailable")).toHaveTextContent(
@@ -242,7 +264,7 @@ describe("DashboardPage", () => {
         ]),
       );
 
-      render(<DashboardPage />);
+      renderDash();
 
       await screen.findByTestId("recommendation-unavailable");
       expect(screen.getByTestId("node-verify")).toHaveAttribute("data-status", "failed");
@@ -274,7 +296,7 @@ describe("DashboardPage", () => {
         ]),
       );
 
-      render(<DashboardPage />);
+      renderDash();
 
       await screen.findByTestId("recommendation-flagged-warning");
       expect(screen.getByTestId("recommendation-flagged-warning")).toHaveTextContent(
@@ -302,7 +324,7 @@ describe("DashboardPage", () => {
         ]),
       );
 
-      render(<DashboardPage />);
+      renderDash();
 
       await screen.findByTestId("citation-chip");
       expect(screen.getByTestId("citation-chip")).toHaveAttribute("data-placeholder", "true");
@@ -318,7 +340,7 @@ describe("DashboardPage", () => {
         erroringStream([stageEvent("retrieve", "running")]),
       );
 
-      render(<DashboardPage />);
+      renderDash();
 
       await screen.findByTestId("recommendation-unavailable");
       for (const stage of STAGES) {
@@ -342,7 +364,7 @@ describe("DashboardPage", () => {
         ]),
       );
 
-      render(<DashboardPage />);
+      renderDash();
 
       await screen.findByTestId("recommendation-unavailable");
       for (const stage of STAGES) {

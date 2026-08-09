@@ -18,11 +18,12 @@ from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
 
-from . import companies, db
+from . import companies, db, production_months
 from .emissions.calculator import calculate_emissions
 from .emissions.compliance import assess, suggest_cap_from_baseline
 from .forecasting.service import ForecastUnavailable, current_forecast
 from .schemas import (
+    CommitRunRequest,
     CompliancePositionResponse,
     EmissionResponse,
     OperationalRequest,
@@ -63,7 +64,7 @@ async def suggest_cap(user_id: UUID, req: SuggestCapRequest) -> dict:
     return {"capTco2e": cap, "baselineTco2e": baseline.total_emissions}
 
 
-async def commit(user_id: UUID, op: OperationalRequest) -> RunResponse:
+async def commit(user_id: UUID, req: CommitRunRequest) -> RunResponse:
     """Compute and persist one snapshot for the caller's own company.
 
     `company["id"]` used as `company_id` below comes from a row that was
@@ -71,7 +72,10 @@ async def commit(user_id: UUID, op: OperationalRequest) -> RunResponse:
     committed run can never be attached to another tenant's company.
     """
     company = await companies.require(user_id)
-    result = _emissions_for(company, op)
+    period_date = (
+        production_months.parse_period_param(req.period) if req.period is not None else None
+    )
+    result = _emissions_for(company, req)
     try:
         forecast = await current_forecast()
     except ForecastUnavailable as exc:
@@ -92,19 +96,23 @@ async def commit(user_id: UUID, op: OperationalRequest) -> RunResponse:
 
     run_id = uuid4()
     now = datetime.now(UTC)
+    # Persist operational levers only — period is a separate column, not
+    # duplicated inside the inputs jsonb blob.
+    op_payload = req.model_dump(by_alias=True, exclude={"period"})
     await db.execute(
         """insert into public.calculation_runs
            (id, user_id, company_id, inputs, result, compliance,
-            forecast_snapshot, created_at)
-           values ($1,$2,$3,$4,$5,$6,$7,$8)""",
+            forecast_snapshot, created_at, period)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9)""",
         run_id,
         user_id,
         company["id"],
-        json.dumps(op.model_dump(by_alias=True)),
+        json.dumps(op_payload),
         json.dumps(EmissionResponse.from_result(result).model_dump(by_alias=True)),
         json.dumps(CompliancePositionResponse(**position.__dict__).model_dump(by_alias=True)),
         json.dumps(forecast),
         now,
+        period_date,
     )
     return RunResponse(
         id=str(run_id),
@@ -112,6 +120,7 @@ async def commit(user_id: UUID, op: OperationalRequest) -> RunResponse:
         compliance=CompliancePositionResponse(**position.__dict__),
         forecast_snapshot=forecast,
         created_at=now.isoformat(),
+        period=production_months.period_to_wire(period_date) if period_date else None,
     )
 
 
@@ -125,10 +134,12 @@ async def get(user_id: UUID, run_id: UUID) -> RunResponse:
     )
     if row is None:
         raise HTTPException(status_code=404, detail="Run not found")
+    period = row["period"]
     return RunResponse(
         id=str(row["id"]),
         result=EmissionResponse(**json.loads(row["result"])),
         compliance=CompliancePositionResponse(**json.loads(row["compliance"])),
         forecast_snapshot=json.loads(row["forecast_snapshot"]),
         created_at=row["created_at"].isoformat(),
+        period=production_months.period_to_wire(period) if period is not None else None,
     )

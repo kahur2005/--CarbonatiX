@@ -1,43 +1,30 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactElement } from "react";
 import TwinPage from "./page";
-import { getCompany, postEmissions, postRun, postDocument } from "@/lib/api";
+import { PeriodProvider } from "@/components/shell/PeriodProvider";
+import { ThemeProvider } from "@/components/shell/ThemeProvider";
+import {
+  getCompany,
+  getProductionMonth,
+  postDocument,
+  postEmissions,
+  postRun,
+  putProductionMonth,
+} from "@/lib/api";
 import { FIELD_ERROR_MESSAGE, POWER_MIX_INCOMPLETE_MESSAGE } from "@/lib/twin";
 import type { Company, EmissionResult } from "@/types/emissions";
 
-// `Scene` needs a WebGL canvas, which jsdom cannot provide -- it's mocked
-// out here so this file can exercise the surrounding page logic (which
-// node panel is open, the commit gate, 422 routing) without needing a real
-// GPU context. The mock exposes one button per node (standing in for
-// "click the mesh") and renders `nodeErrors` as plain text so a 422's
-// node-routing is observable without touching the real Scene.
-vi.mock("@/components/twin/Scene", () => ({
-  default: (props: {
-    onSelectNode: (node: string) => void;
-    nodeErrors: Record<string, string | undefined>;
-  }) => (
-    <div data-testid="scene-mock">
-      {["stockpile", "dryer", "kiln", "eaf", "pltu"].map((node) => (
-        <button
-          key={node}
-          type="button"
-          data-testid={`select-${node}`}
-          onClick={() => props.onSelectNode(node)}
-        >
-          select {node}
-        </button>
-      ))}
-      {Object.entries(props.nodeErrors).map(
-        ([node, message]) =>
-          message && (
-            <p key={node} data-testid={`scene-error-${node}`}>
-              {message}
-            </p>
-          ),
-      )}
-    </div>
-  ),
+// TwinScene needs WebGL — mocked so page logic (node panel, commit gate,
+// 422 routing) can run in jsdom. Selectors live on the page's node list
+// (`data-testid="select-*"`); the GLB canvas itself is a no-op.
+vi.mock("@/components/twin/TwinScene", () => ({
+  default: () => <div data-testid="scene-mock" />,
+}));
+
+vi.mock("@/components/shell/MonthPicker", () => ({
+  default: () => null,
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -45,12 +32,24 @@ vi.mock("@/lib/api", () => ({
   postEmissions: vi.fn(),
   postRun: vi.fn(),
   postDocument: vi.fn(),
+  getProductionMonth: vi.fn(),
+  putProductionMonth: vi.fn(),
+  listProductionMonths: vi.fn(),
 }));
 
 const pushMock = vi.fn();
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: pushMock }),
+  usePathname: () => "/twin",
 }));
+
+function renderTwin(ui: ReactElement = <TwinPage />) {
+  return render(
+    <ThemeProvider>
+      <PeriodProvider>{ui}</PeriodProvider>
+    </ThemeProvider>,
+  );
+}
 
 const VALID_COMPANY: Company = {
   name: "PT Contoh Smelter",
@@ -114,12 +113,19 @@ describe("TwinPage", () => {
     vi.mocked(postEmissions).mockReset().mockResolvedValue(VALID_RESULT);
     vi.mocked(postRun).mockReset();
     vi.mocked(postDocument).mockReset();
+    vi.mocked(getProductionMonth).mockReset().mockResolvedValue(null);
+    vi.mocked(putProductionMonth).mockReset().mockResolvedValue({
+      period: "2026-08",
+      inputs: {},
+      updatedAt: "2026-08-08T00:00:00Z",
+    });
     pushMock.mockReset();
+    sessionStorage.clear();
   });
 
   it("disables commit while the pltu power mix is incomplete, enables it at exactly 100%", async () => {
     const user = userEvent.setup();
-    render(<TwinPage />);
+    renderTwin();
 
     await fillValidFormExceptPowerMix(user);
 
@@ -140,7 +146,7 @@ describe("TwinPage", () => {
 
   it("sends the company's site-spec values verbatim to /emissions, with no editable field that could override them", async () => {
     const user = userEvent.setup();
-    render(<TwinPage />);
+    renderTwin();
 
     await fillValidFormExceptPowerMix(user);
     await user.click(screen.getByTestId("select-pltu"));
@@ -195,7 +201,7 @@ describe("TwinPage", () => {
     );
 
     const user = userEvent.setup();
-    render(<TwinPage />);
+    renderTwin();
 
     await fillValidFormExceptPowerMix(user);
     await user.click(screen.getByTestId("select-pltu"));
@@ -219,5 +225,87 @@ describe("TwinPage", () => {
     expect(
       screen.queryByText("Tidak dapat menghitung ulang emisi. Periksa koneksi Anda."),
     ).not.toBeInTheDocument();
+  });
+
+  it("hydrates operational fields from the monthly production log", async () => {
+    vi.mocked(getProductionMonth).mockResolvedValue({
+      period: "2026-08",
+      updatedAt: "2026-08-01T00:00:00Z",
+      inputs: {
+        wetOreInputTons: 9000,
+        moistureContentPct: 0.3,
+        nickelGradePct: 0.02,
+        reductantBiocokePct: 0.05,
+        powerMixCaptiveCoal: 0.6,
+        powerMixHydroGrid: 0.4,
+      },
+    });
+
+    renderTwin();
+    await userEvent.setup().click(await screen.findByTestId("select-stockpile"));
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Bijih basah masuk/)).toHaveValue(9000);
+    });
+    expect(screen.getByLabelText(/Kadar air/)).toHaveValue(30);
+  });
+
+  it("commits with the selected production period", async () => {
+    const user = userEvent.setup();
+    vi.mocked(postRun).mockResolvedValue({
+      id: "run-xyz",
+      result: VALID_RESULT,
+      compliance: {
+        capTco2e: 120000,
+        projectedTco2e: 75,
+        positionTco2e: -119925,
+        isCompliant: true,
+        positionValueIdr: 0,
+      },
+      forecastSnapshot: {
+        dates: [],
+        lmeUsdPerTon: [],
+        lmeUsdPerTonLower: [],
+        lmeUsdPerTonUpper: [],
+        idxCarbonIdrPerTon: [1],
+        idxCarbonIdrPerTonLower: [],
+        idxCarbonIdrPerTonUpper: [],
+        stale: false,
+        synthetic: true,
+        provenance: {
+          lmeUsdPerTon: { synthetic: true },
+          idxCarbonIdrPerTon: { synthetic: true },
+        },
+      },
+      createdAt: "2026-08-08T00:00:00Z",
+      period: "2026-08",
+    });
+
+    renderTwin();
+    await fillValidFormExceptPowerMix(user);
+    await user.click(screen.getByTestId("select-pltu"));
+    await user.type(screen.getByLabelText(/captive coal/), "70");
+    await user.type(screen.getByLabelText(/hidro\/grid/), "30");
+
+    const commitButton = screen.getByRole("button", { name: "Simpan perhitungan" });
+    await waitFor(() => expect(commitButton).not.toBeDisabled());
+    await user.click(commitButton);
+
+    await waitFor(() => expect(postRun).toHaveBeenCalled());
+    const payload = vi.mocked(postRun).mock.calls.at(-1)?.[0];
+    expect(payload?.period).toMatch(/^\d{4}-\d{2}$/);
+    expect(pushMock).toHaveBeenCalledWith("/dashboard?run=run-xyz");
+  });
+
+  it("debounced autosave PUTs partial inputs after edits", async () => {
+    const user = userEvent.setup();
+    renderTwin();
+    await user.click(await screen.findByTestId("select-stockpile"));
+    await user.type(screen.getByLabelText(/Bijih basah masuk/), "5000");
+    await waitFor(
+      () => expect(putProductionMonth).toHaveBeenCalled(),
+      { timeout: 3000 },
+    );
+    const last = vi.mocked(putProductionMonth).mock.calls.at(-1);
+    expect(last?.[1]).toMatchObject({ wetOreInputTons: 5000 });
   });
 });

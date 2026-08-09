@@ -3,10 +3,12 @@
 import { useState } from "react";
 import Link from "next/link";
 import UploadDropzone from "@/components/twin/UploadDropzone";
+import { useTheme } from "@/components/shell/ThemeProvider";
 import {
   formatSiteSpecValue,
   NODE_FIELDS,
   NODE_LABELS,
+  nodeHasOperationalInput,
   OPERATIONAL_FIELD_LABELS,
   POWER_MIX_INCOMPLETE_MESSAGE,
   powerMixSummary,
@@ -24,6 +26,8 @@ export interface NodePanelProps {
   form: TwinFormState;
   onFieldChange: <K extends keyof TwinFormState>(key: K, value: string) => void;
   onAcceptCandidate: (field: string, displayValue: number) => void;
+  /** Clears a form field after Perbaiki on an auto-filled OCR candidate. */
+  onClearCandidate: (field: string) => void;
   /** The saved company profile, for this node's read-only site-spec
    * field(s) (see `lib/twin.ts`'s `SiteSpecFieldDescriptor`). `null` while
    * still loading or when onboarding hasn't been completed yet -- the
@@ -40,36 +44,33 @@ export interface NodePanelProps {
   onClose: () => void;
 }
 
-const NUMBER_INPUT_CLASS =
-  "rounded border border-black/[.15] bg-transparent px-3 py-2 text-sm text-black outline-none focus:border-black dark:border-white/[.2] dark:text-zinc-50 dark:focus:border-white";
-const LABEL_CLASS = "text-sm font-medium text-black dark:text-zinc-50";
-
 function formatTco2e(value: number | null): string {
   if (value === null || !Number.isFinite(value)) return "-- tCO2e";
   return `${value.toLocaleString("id-ID", { maximumFractionDigits: 2 })} tCO2e`;
 }
 
 /**
- * The twin's per-node input surface. Clicking a mesh in `Scene` opens this
- * for that node, holding exactly the fields `NODE_FIELDS` assigns it --
- * the same table that must match `NODE_FOR_FIELD` in
- * `app/ingestion/mapping.py`. Two tabs: manual entry, and a document
- * upload that reuses `UploadDropzone` unmodified (`profile="operational"`)
- * so the "a candidate never populates a field without an explicit click"
- * rule stays enforced by the one component that already implements it.
+ * The twin's per-node input surface. Text colors come from `useTheme()`
+ * (not Tailwind `dark:`) so light mode stays near-black and dark mode
+ * near-white regardless of OS color-scheme.
  */
 export default function NodePanel({
   node,
   form,
   onFieldChange,
   onAcceptCandidate,
+  onClearCandidate,
   company,
   badgeValue,
   errorMessage,
   onClose,
 }: NodePanelProps) {
+  const { colors: C } = useTheme();
+  const hasOperational = nodeHasOperationalInput(node);
   const [tab, setTab] = useState<Tab>("manual");
   const fields = NODE_FIELDS[node];
+  const siteSpecFields = fields.filter((f) => f.kind === "siteSpec");
+  const operationalFields = fields.filter((f) => f.kind === "operational");
 
   const mix =
     node === "pltu"
@@ -79,66 +80,106 @@ export default function NodePanel({
         )
       : null;
 
+  const inputStyle = {
+    background: C.panel,
+    border: `1px solid ${C.border}`,
+    color: C.text,
+  };
+
   return (
-    <div className="flex w-full max-w-sm flex-col gap-4 rounded-lg border border-black/[.08] bg-white p-4 shadow-lg dark:border-white/[.145] dark:bg-zinc-950">
+    <div className="flex w-full max-w-sm flex-col gap-4 p-4" style={{ color: C.text }}>
       <div className="flex items-start justify-between gap-2">
         <div>
-          <h2 className="text-lg font-semibold text-black dark:text-zinc-50">
+          <h2 className="text-lg font-semibold" style={{ color: C.text }}>
             {NODE_LABELS[node]}
           </h2>
-          <p className="font-mono text-sm text-zinc-600 dark:text-zinc-400">
+          <p className="font-mono text-sm" style={{ color: C.dimText }}>
             {formatTco2e(badgeValue)}
           </p>
+          {!hasOperational && (
+            <p
+              className="mt-1 text-[10px] font-medium uppercase tracking-wider"
+              style={{ color: C.amber }}
+            >
+              Spesifikasi situs · tanpa input interval
+            </p>
+          )}
         </div>
         <button
           type="button"
           aria-label="Tutup panel"
           onClick={onClose}
-          className="rounded-full px-2 py-1 text-sm text-zinc-500 hover:bg-black/[.05] dark:text-zinc-400 dark:hover:bg-white/[.08]"
+          className="rounded-full px-2 py-1 text-sm transition-opacity hover:opacity-70"
+          style={{ color: C.muted }}
         >
           Tutup
         </button>
       </div>
 
       {errorMessage && (
-        <p role="alert" className="text-sm text-red-600 dark:text-red-400">
+        <p role="alert" className="text-sm" style={{ color: C.red }}>
           {errorMessage}
         </p>
       )}
 
-      <div className="flex gap-2 border-b border-black/[.08] dark:border-white/[.145]">
-        <button
-          type="button"
-          onClick={() => setTab("manual")}
-          aria-pressed={tab === "manual"}
-          className={`px-2 pb-2 text-sm font-medium ${
-            tab === "manual"
-              ? "border-b-2 border-black text-black dark:border-white dark:text-zinc-50"
-              : "text-zinc-500 dark:text-zinc-400"
-          }`}
-        >
-          Isi manual
-        </button>
-        <button
-          type="button"
-          onClick={() => setTab("upload")}
-          aria-pressed={tab === "upload"}
-          className={`px-2 pb-2 text-sm font-medium ${
-            tab === "upload"
-              ? "border-b-2 border-black text-black dark:border-white dark:text-zinc-50"
-              : "text-zinc-500 dark:text-zinc-400"
-          }`}
-        >
-          Unggah dokumen
-        </button>
-      </div>
+      {hasOperational ? (
+        <div className="flex gap-2" style={{ borderBottom: `1px solid ${C.border}` }}>
+          <button
+            type="button"
+            onClick={() => setTab("manual")}
+            aria-pressed={tab === "manual"}
+            className="px-2 pb-2 text-sm font-medium"
+            style={{
+              color: tab === "manual" ? C.text : C.muted,
+              borderBottom: tab === "manual" ? `2px solid ${C.cyan}` : "2px solid transparent",
+            }}
+          >
+            Isi manual
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab("upload")}
+            aria-pressed={tab === "upload"}
+            className="px-2 pb-2 text-sm font-medium"
+            style={{
+              color: tab === "upload" ? C.text : C.muted,
+              borderBottom: tab === "upload" ? `2px solid ${C.cyan}` : "2px solid transparent",
+            }}
+          >
+            Unggah dokumen
+          </button>
+        </div>
+      ) : null}
 
-      {tab === "manual" && (
+      {(!hasOperational || tab === "manual") && (
         <div className="flex flex-col gap-3">
-          {fields.map((field) =>
+          {!hasOperational && (
+            <div
+              className="rounded-md px-3 py-2 text-xs leading-relaxed"
+              style={{
+                background: `${C.amber}18`,
+                border: `1px solid ${C.amber}55`,
+                color: C.text,
+              }}
+            >
+              Node ini tidak punya field operasional harian. Nilainya diambil dari
+              spesifikasi situs (disetel saat onboarding) agar pratinjau emisi selalu
+              sama dengan yang disimpan saat commit.{" "}
+              <Link href="/onboarding" className="underline" style={{ color: C.cyan }}>
+                {SITE_SPEC_EDIT_LABEL}
+              </Link>
+              .
+            </div>
+          )}
+
+          {operationalFields.map((field) =>
             field.kind === "operational" ? (
               <div key={field.key} className="flex flex-col gap-1">
-                <label htmlFor={`twin-${field.key}`} className={LABEL_CLASS}>
+                <label
+                  htmlFor={`twin-${field.key}`}
+                  className="text-sm font-medium"
+                  style={{ color: C.text }}
+                >
                   {field.label}
                   {field.unit ? ` (${field.unit})` : ""}
                 </label>
@@ -150,57 +191,69 @@ export default function NodePanel({
                   max={field.range.max}
                   value={form[field.key]}
                   onChange={(e) => onFieldChange(field.key, e.target.value)}
-                  className={NUMBER_INPUT_CLASS}
+                  className="rounded px-3 py-2 text-sm outline-none"
+                  style={inputStyle}
                 />
               </div>
-            ) : (
-              // Site-spec field: read-only. See `SiteSpecFieldDescriptor` in
-              // lib/twin.ts for why -- an editable override here changed
-              // the live preview without changing what a committed run
-              // actually used, which is a trap in a carbon-accounting
-              // product, not a convenience.
+            ) : null,
+          )}
+
+          {siteSpecFields.map((field) =>
+            field.kind === "siteSpec" ? (
               <div key={field.companyKey} className="flex flex-col gap-1">
-                <span className={LABEL_CLASS}>
+                <span className="text-sm font-medium" style={{ color: C.text }}>
                   {field.label}
                   {field.unit ? ` (${field.unit})` : ""}
                 </span>
-                <p className="rounded border border-black/[.08] bg-black/[.02] px-3 py-2 text-sm text-black dark:border-white/[.145] dark:bg-white/[.04] dark:text-zinc-50">
+                <p
+                  className="rounded px-3 py-2 text-sm font-mono"
+                  style={{
+                    background: C.panel,
+                    border: `1px solid ${C.border}`,
+                    color: C.text,
+                  }}
+                >
                   {company ? formatSiteSpecValue(field, company) : "--"}
                 </p>
-                <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                  Nilai dari spesifikasi situs tersimpan -- tidak dapat diubah di sini.{" "}
-                  <Link href="/onboarding" className="underline">
-                    {SITE_SPEC_EDIT_LABEL}
-                  </Link>
-                  .
-                </p>
+                {hasOperational ? (
+                  <p className="text-xs" style={{ color: C.muted }}>
+                    Nilai dari spesifikasi situs tersimpan -- tidak dapat diubah di sini.{" "}
+                    <Link href="/onboarding" className="underline" style={{ color: C.cyan }}>
+                      {SITE_SPEC_EDIT_LABEL}
+                    </Link>
+                    .
+                  </p>
+                ) : null}
               </div>
-            ),
+            ) : null,
           )}
 
           {mix && (
             <div
-              className={`rounded border px-3 py-2 text-sm ${
-                mix.complete
-                  ? "border-black/[.08] text-zinc-600 dark:border-white/[.145] dark:text-zinc-400"
-                  : "border-amber-400 text-amber-700 dark:border-amber-500 dark:text-amber-400"
-              }`}
+              className="rounded border px-3 py-2 text-sm"
+              style={{
+                borderColor: mix.complete ? C.border : C.amber,
+                color: mix.complete ? C.dimText : C.amber,
+              }}
             >
               <p>
                 Tercatat: {mix.recordedPercent.toFixed(2)}% &middot; Belum tercatat:{" "}
                 {Math.max(mix.remainderPercent, 0).toFixed(2)}%
               </p>
-              {!mix.complete && <p className="mt-1 font-medium">{POWER_MIX_INCOMPLETE_MESSAGE}</p>}
+              {!mix.complete && (
+                <p className="mt-1 font-medium">{POWER_MIX_INCOMPLETE_MESSAGE}</p>
+              )}
             </div>
           )}
         </div>
       )}
 
-      {tab === "upload" && (
+      {hasOperational && tab === "upload" && (
         <UploadDropzone
           profile="operational"
           fieldLabels={OPERATIONAL_FIELD_LABELS}
           onAccept={onAcceptCandidate}
+          onClear={onClearCandidate}
         />
       )}
     </div>

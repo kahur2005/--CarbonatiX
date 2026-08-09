@@ -92,6 +92,25 @@ export interface OperationalInput {
   reductantBiocokePct: number;
   powerMixCaptiveCoal: number;
   powerMixHydroGrid: number;
+  /** Twin production month (`YYYY-MM`); stamped onto the committed run. */
+  period?: string;
+}
+
+/** Partial draft for `PUT /production-months/{yyyy-mm}` — missing keys = blank. */
+export type ProductionMonthInputs = Partial<
+  Omit<OperationalInput, "period">
+>;
+
+export interface ProductionMonthSummary {
+  period: string;
+  updatedAt: string;
+  hasInputs: boolean;
+}
+
+export interface ProductionMonth {
+  period: string;
+  inputs: ProductionMonthInputs;
+  updatedAt: string;
 }
 
 export interface SuggestCapInput extends OperationalInput {
@@ -113,6 +132,8 @@ export interface RunResult {
   compliance: CompliancePosition;
   forecastSnapshot: ForecastSnapshot;
   createdAt: string;
+  /** Production month (`YYYY-MM`) when the twin stamped the commit. */
+  period?: string | null;
 }
 
 // ---- /forecasts (app/forecasting/service.py's current_forecast) --------
