@@ -3,6 +3,9 @@
 import { useRouter } from "next/navigation";
 import { type FormEvent, useState } from "react";
 import UploadDropzone, { type FieldMeta } from "@/components/twin/UploadDropzone";
+import AppShell from "@/components/shell/AppShell";
+import { Card } from "@/components/shell/primitives";
+import { useTheme } from "@/components/shell/ThemeProvider";
 import { putCompany, postSuggestCap } from "@/lib/api";
 import {
   buildCompanyInput,
@@ -49,6 +52,21 @@ const SITE_SPEC_FIELD_LABELS: Record<string, FieldMeta> = {
     unit: "kWh/ton alloy",
     isPercent: false,
   },
+  alloy_nickel_grade: {
+    label: "Kadar nikel alloy",
+    unit: "%",
+    isPercent: true,
+  },
+  kiln_thermal_efficiency: {
+    label: "Efisiensi termal kiln",
+    unit: "%",
+    isPercent: true,
+  },
+  cap_tco2e: {
+    label: "Kuota karbon absolut",
+    unit: "tCO₂e",
+    isPercent: false,
+  },
 };
 
 /** Maps a candidate's field name onto the key this page's form state uses
@@ -58,6 +76,9 @@ const CANDIDATE_FIELD_TO_FORM_KEY: Record<string, keyof FormState> = {
   ef_captive_pltu: "efCaptivePltu",
   dryer_thermal_efficiency: "dryerThermalEfficiencyPercent",
   sec_eaf_kwh_per_t_alloy: "secEafKwhPerTAlloy",
+  alloy_nickel_grade: "alloyNickelGradePercent",
+  kiln_thermal_efficiency: "kilnThermalEfficiencyPercent",
+  cap_tco2e: "capTco2e",
 };
 
 /** All numeric fields are held as the raw string the input shows, so an
@@ -112,16 +133,22 @@ const EMPTY_HELPER: HelperState = {
   baselineTco2e: null,
 };
 
-const NUMBER_INPUT_CLASS =
-  "rounded border border-black/[.15] bg-transparent px-3 py-2 text-sm text-black outline-none focus:border-black dark:border-white/[.2] dark:text-zinc-50 dark:focus:border-white";
-const LABEL_CLASS = "text-sm font-medium text-black dark:text-zinc-50";
-
 function toNumber(value: string): number {
   return value.trim() === "" ? NaN : Number(value);
 }
 
 export default function OnboardingPage() {
   const router = useRouter();
+  const { colors: C } = useTheme();
+  const NUMBER_INPUT_CLASS =
+    "rounded px-3 py-2 text-sm outline-none w-full";
+  const LABEL_CLASS = "text-sm font-medium";
+  const inputStyle = {
+    background: C.panel,
+    border: `1px solid ${C.border}`,
+    color: C.text,
+  };
+  const labelStyle = { color: C.text };
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [helper, setHelper] = useState<HelperState>(EMPTY_HELPER);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -139,6 +166,12 @@ export default function OnboardingPage() {
     const formKey = CANDIDATE_FIELD_TO_FORM_KEY[field];
     if (!formKey) return;
     setField(formKey, String(displayValue));
+  }
+
+  function handleClearCandidate(field: string) {
+    const formKey = CANDIDATE_FIELD_TO_FORM_KEY[field];
+    if (!formKey) return;
+    setField(formKey, "");
   }
 
   async function handleCalculateCap() {
@@ -240,12 +273,16 @@ export default function OnboardingPage() {
   );
 
   return (
-    <div className="flex flex-1 flex-col items-center bg-zinc-50 px-4 py-10 dark:bg-black">
-      <div className="w-full max-w-2xl rounded-lg border border-black/[.08] bg-white p-8 dark:border-white/[.145] dark:bg-zinc-950">
-        <h1 className="mb-1 text-2xl font-semibold text-black dark:text-zinc-50">
+    <AppShell>
+      <div className="flex flex-1 flex-col items-center px-4 py-10" style={{ background: C.bg }}>
+      <Card className="w-full max-w-2xl p-8">
+        <h1
+          className="mb-1 text-2xl font-bold tracking-wider"
+          style={{ fontFamily: "var(--font-display), sans-serif", color: C.text }}
+        >
           Spesifikasi Situs
         </h1>
-        <p className="mb-6 text-sm text-zinc-600 dark:text-zinc-400">
+        <p className="mb-6 text-sm" style={{ color: C.dimText }}>
           Nilai-nilai yang jarang berubah pada smelter Anda. Data operasional harian diisi
           nanti pada twin 3D.
         </p>
@@ -253,7 +290,7 @@ export default function OnboardingPage() {
         <form onSubmit={handleSubmit} className="flex flex-col gap-6">
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-1">
-              <label htmlFor="name" className={LABEL_CLASS}>
+              <label htmlFor="name" className={LABEL_CLASS} style={labelStyle}>
                 Nama perusahaan
               </label>
               <input
@@ -262,11 +299,12 @@ export default function OnboardingPage() {
                 value={form.name}
                 onChange={(e) => setField("name", e.target.value)}
                 className={NUMBER_INPUT_CLASS}
+                  style={inputStyle}
               />
             </div>
 
             <div className="flex flex-col gap-1">
-              <label htmlFor="technology" className={LABEL_CLASS}>
+              <label htmlFor="technology" className={LABEL_CLASS} style={labelStyle}>
                 Teknologi
               </label>
               <input
@@ -275,12 +313,13 @@ export default function OnboardingPage() {
                 value={form.technology}
                 onChange={(e) => setField("technology", e.target.value)}
                 className={NUMBER_INPUT_CLASS}
+                  style={inputStyle}
               />
             </div>
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="flex flex-col gap-1">
-                <label htmlFor="efCaptivePltu" className={LABEL_CLASS}>
+                <label htmlFor="efCaptivePltu" className={LABEL_CLASS} style={labelStyle}>
                   Faktor emisi PLTU captive (tCO₂e/MWh)
                 </label>
                 <input
@@ -292,11 +331,12 @@ export default function OnboardingPage() {
                   value={form.efCaptivePltu}
                   onChange={(e) => setField("efCaptivePltu", e.target.value)}
                   className={NUMBER_INPUT_CLASS}
+                  style={inputStyle}
                 />
               </div>
 
               <div className="flex flex-col gap-1">
-                <label htmlFor="dryerThermalEfficiency" className={LABEL_CLASS}>
+                <label htmlFor="dryerThermalEfficiency" className={LABEL_CLASS} style={labelStyle}>
                   Efisiensi termal dryer (%)
                 </label>
                 <input
@@ -309,11 +349,12 @@ export default function OnboardingPage() {
                   value={form.dryerThermalEfficiencyPercent}
                   onChange={(e) => setField("dryerThermalEfficiencyPercent", e.target.value)}
                   className={NUMBER_INPUT_CLASS}
+                  style={inputStyle}
                 />
               </div>
 
               <div className="flex flex-col gap-1">
-                <label htmlFor="secEafKwhPerTAlloy" className={LABEL_CLASS}>
+                <label htmlFor="secEafKwhPerTAlloy" className={LABEL_CLASS} style={labelStyle}>
                   Energi spesifik EAF (kWh/ton alloy)
                 </label>
                 <input
@@ -325,11 +366,12 @@ export default function OnboardingPage() {
                   value={form.secEafKwhPerTAlloy}
                   onChange={(e) => setField("secEafKwhPerTAlloy", e.target.value)}
                   className={NUMBER_INPUT_CLASS}
+                  style={inputStyle}
                 />
               </div>
 
               <div className="flex flex-col gap-1">
-                <label htmlFor="alloyNickelGrade" className={LABEL_CLASS}>
+                <label htmlFor="alloyNickelGrade" className={LABEL_CLASS} style={labelStyle}>
                   Kadar nikel alloy (%)
                 </label>
                 <input
@@ -342,11 +384,12 @@ export default function OnboardingPage() {
                   value={form.alloyNickelGradePercent}
                   onChange={(e) => setField("alloyNickelGradePercent", e.target.value)}
                   className={NUMBER_INPUT_CLASS}
+                  style={inputStyle}
                 />
               </div>
 
               <div className="flex flex-col gap-1">
-                <label htmlFor="kilnThermalEfficiency" className={LABEL_CLASS}>
+                <label htmlFor="kilnThermalEfficiency" className={LABEL_CLASS} style={labelStyle}>
                   Efisiensi termal kiln (%)
                 </label>
                 <input
@@ -359,6 +402,7 @@ export default function OnboardingPage() {
                   value={form.kilnThermalEfficiencyPercent}
                   onChange={(e) => setField("kilnThermalEfficiencyPercent", e.target.value)}
                   className={NUMBER_INPUT_CLASS}
+                  style={inputStyle}
                 />
               </div>
             </div>
@@ -367,7 +411,7 @@ export default function OnboardingPage() {
           <div className="flex flex-col gap-2 rounded-lg border border-black/[.08] p-4 dark:border-white/[.145]">
             <div className="flex flex-wrap items-end justify-between gap-2">
               <div className="flex flex-1 flex-col gap-1">
-                <label htmlFor="capTco2e" className={LABEL_CLASS}>
+                <label htmlFor="capTco2e" className={LABEL_CLASS} style={labelStyle}>
                   Kuota karbon (tCO₂e per periode)
                 </label>
                 <input
@@ -379,6 +423,7 @@ export default function OnboardingPage() {
                   value={form.capTco2e}
                   onChange={(e) => setField("capTco2e", e.target.value)}
                   className={NUMBER_INPUT_CLASS}
+                  style={inputStyle}
                 />
               </div>
               <button
@@ -411,7 +456,7 @@ export default function OnboardingPage() {
 
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div className="flex flex-col gap-1">
-                    <label htmlFor="helperWetOre" className={LABEL_CLASS}>
+                    <label htmlFor="helperWetOre" className={LABEL_CLASS} style={labelStyle}>
                       Bijih basah masuk (ton)
                     </label>
                     <input
@@ -422,10 +467,11 @@ export default function OnboardingPage() {
                       value={helper.wetOreInputTons}
                       onChange={(e) => setHelperField("wetOreInputTons", e.target.value)}
                       className={NUMBER_INPUT_CLASS}
+                  style={inputStyle}
                     />
                   </div>
                   <div className="flex flex-col gap-1">
-                    <label htmlFor="helperMoisture" className={LABEL_CLASS}>
+                    <label htmlFor="helperMoisture" className={LABEL_CLASS} style={labelStyle}>
                       Kadar air (%)
                     </label>
                     <input
@@ -437,10 +483,11 @@ export default function OnboardingPage() {
                       value={helper.moistureContentPercent}
                       onChange={(e) => setHelperField("moistureContentPercent", e.target.value)}
                       className={NUMBER_INPUT_CLASS}
+                  style={inputStyle}
                     />
                   </div>
                   <div className="flex flex-col gap-1">
-                    <label htmlFor="helperNickelGrade" className={LABEL_CLASS}>
+                    <label htmlFor="helperNickelGrade" className={LABEL_CLASS} style={labelStyle}>
                       Kadar nikel bijih (%)
                     </label>
                     <input
@@ -452,10 +499,11 @@ export default function OnboardingPage() {
                       value={helper.nickelGradePercent}
                       onChange={(e) => setHelperField("nickelGradePercent", e.target.value)}
                       className={NUMBER_INPUT_CLASS}
+                  style={inputStyle}
                     />
                   </div>
                   <div className="flex flex-col gap-1">
-                    <label htmlFor="helperBiocoke" className={LABEL_CLASS}>
+                    <label htmlFor="helperBiocoke" className={LABEL_CLASS} style={labelStyle}>
                       Reduktan biocoke (%)
                     </label>
                     <input
@@ -467,10 +515,11 @@ export default function OnboardingPage() {
                       value={helper.reductantBiocokePercent}
                       onChange={(e) => setHelperField("reductantBiocokePercent", e.target.value)}
                       className={NUMBER_INPUT_CLASS}
+                  style={inputStyle}
                     />
                   </div>
                   <div className="flex flex-col gap-1">
-                    <label htmlFor="helperCaptiveCoal" className={LABEL_CLASS}>
+                    <label htmlFor="helperCaptiveCoal" className={LABEL_CLASS} style={labelStyle}>
                       Bauran daya -- captive coal (%)
                     </label>
                     <input
@@ -484,10 +533,11 @@ export default function OnboardingPage() {
                         setHelperField("powerMixCaptiveCoalPercent", e.target.value)
                       }
                       className={NUMBER_INPUT_CLASS}
+                  style={inputStyle}
                     />
                   </div>
                   <div className="flex flex-col gap-1">
-                    <label htmlFor="helperHydroGrid" className={LABEL_CLASS}>
+                    <label htmlFor="helperHydroGrid" className={LABEL_CLASS} style={labelStyle}>
                       Bauran daya -- hidro/grid (%)
                     </label>
                     <input
@@ -499,10 +549,11 @@ export default function OnboardingPage() {
                       value={helper.powerMixHydroGridPercent}
                       onChange={(e) => setHelperField("powerMixHydroGridPercent", e.target.value)}
                       className={NUMBER_INPUT_CLASS}
+                  style={inputStyle}
                     />
                   </div>
                   <div className="flex flex-col gap-1">
-                    <label htmlFor="helperReductionTarget" className={LABEL_CLASS}>
+                    <label htmlFor="helperReductionTarget" className={LABEL_CLASS} style={labelStyle}>
                       Target penurunan dari baseline (%)
                     </label>
                     <input
@@ -514,6 +565,7 @@ export default function OnboardingPage() {
                       value={helper.reductionTargetPercent}
                       onChange={(e) => setHelperField("reductionTargetPercent", e.target.value)}
                       className={NUMBER_INPUT_CLASS}
+                  style={inputStyle}
                     />
                   </div>
                 </div>
@@ -542,11 +594,12 @@ export default function OnboardingPage() {
           </div>
 
           <div className="flex flex-col gap-2">
-            <span className={LABEL_CLASS}>Unggah dokumen spesifikasi situs (opsional)</span>
+            <span className={LABEL_CLASS} style={labelStyle}>Unggah dokumen spesifikasi situs (opsional)</span>
             <UploadDropzone
               profile="site_spec"
               fieldLabels={SITE_SPEC_FIELD_LABELS}
               onAccept={handleAcceptCandidate}
+              onClear={handleClearCandidate}
             />
           </div>
 
@@ -564,7 +617,8 @@ export default function OnboardingPage() {
             {submitting ? "Menyimpan..." : "Simpan dan lanjutkan"}
           </button>
         </form>
+      </Card>
       </div>
-    </div>
+    </AppShell>
   );
 }
