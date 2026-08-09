@@ -8,7 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from . import companies, recommendation, runs
+from . import companies, production_months, recommendation, runs
 from .auth import current_user_id
 from .emissions.calculator import calculate_emissions
 from .errors import validation_exception_handler
@@ -19,12 +19,15 @@ from .ingestion.interpret import interpret as interpret_fields
 from .ingestion.mapping import readings_to_candidates
 from .schemas import (
     CandidateResponse,
+    CommitRunRequest,
     CompanyRequest,
     CompanyResponse,
     DocumentExtractionResponse,
     EmissionRequest,
     EmissionResponse,
-    OperationalRequest,
+    ProductionMonthPutRequest,
+    ProductionMonthResponse,
+    ProductionMonthSummary,
     RunResponse,
     SuggestCapRequest,
 )
@@ -136,8 +139,34 @@ async def post_suggest_cap(
     return await runs.suggest_cap(user_id, req)
 
 
+@app.get("/production-months", response_model=list[ProductionMonthSummary])
+async def list_production_months(
+    user_id: UUID = Depends(current_user_id),
+) -> list[ProductionMonthSummary]:
+    rows = await production_months.list_months(user_id)
+    return [ProductionMonthSummary(**row) for row in rows]
+
+
+@app.get("/production-months/{yyyy_mm}", response_model=ProductionMonthResponse)
+async def get_production_month(
+    yyyy_mm: str, user_id: UUID = Depends(current_user_id)
+) -> ProductionMonthResponse:
+    return ProductionMonthResponse(**(await production_months.get_month(user_id, yyyy_mm)))
+
+
+@app.put("/production-months/{yyyy_mm}", response_model=ProductionMonthResponse)
+async def put_production_month(
+    yyyy_mm: str,
+    req: ProductionMonthPutRequest,
+    user_id: UUID = Depends(current_user_id),
+) -> ProductionMonthResponse:
+    return ProductionMonthResponse(
+        **(await production_months.upsert_month(user_id, yyyy_mm, req.inputs))
+    )
+
+
 @app.post("/runs", status_code=status.HTTP_201_CREATED, response_model=RunResponse)
-async def post_run(op: OperationalRequest, user_id: UUID = Depends(current_user_id)) -> RunResponse:
+async def post_run(op: CommitRunRequest, user_id: UUID = Depends(current_user_id)) -> RunResponse:
     return await runs.commit(user_id, op)
 
 

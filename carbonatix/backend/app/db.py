@@ -45,6 +45,12 @@ async def fetchrow(query: str, *args: Any) -> asyncpg.Record | None:
         return await conn.fetchrow(query, *args)
 
 
+async def fetch(query: str, *args: Any) -> list[asyncpg.Record]:
+    p = await pool()
+    async with p.acquire() as conn:
+        return await conn.fetch(query, *args)
+
+
 async def execute(query: str, *args: Any) -> str:
     p = await pool()
     async with p.acquire() as conn:
