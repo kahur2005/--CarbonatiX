@@ -17,7 +17,7 @@ import { type NextRequest, NextResponse } from "next/server";
  * signature on every call. `getSession()` inside server code is not
  * guaranteed to revalidate the token and must not be used here.
  */
-const PROTECTED_PATHS = ["/twin", "/dashboard", "/onboarding"];
+const PROTECTED_PATHS = ["/twin", "/dashboard", "/onboarding", "/workflow"];
 
 function isProtected(pathname: string): boolean {
   return PROTECTED_PATHS.some(
