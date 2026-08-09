@@ -6,6 +6,9 @@ import type {
   EmissionInput,
   EmissionResult,
   OperationalInput,
+  ProductionMonth,
+  ProductionMonthInputs,
+  ProductionMonthSummary,
   RecommendationEvent,
   RunResult,
   SuggestCapInput,
@@ -74,12 +77,48 @@ export async function getCompany(): Promise<Company> {
  * this persists a row and pairs it with the forecast snapshot behind its
  * compliance figure -- see `app/runs.py`'s `commit`. Site-spec values are
  * never part of this payload; the backend reads them from the caller's
- * stored company profile, not from anything the twin sends here. */
+ * stored company profile, not from anything the twin sends here.
+ * Twin commits should include `period` (`YYYY-MM`). */
 export async function postRun(input: OperationalInput): Promise<RunResult> {
   const res = await fetch(`${BASE}/runs`, {
     method: "POST",
     headers: await authHeaders(),
     body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+/** Lists months that have a production-log row (for dropdown badges). */
+export async function listProductionMonths(): Promise<ProductionMonthSummary[]> {
+  const res = await fetch(`${BASE}/production-months`, {
+    headers: await authHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+/** Loads one month's draft. `null` when no row exists (blank twin form). */
+export async function getProductionMonth(
+  yyyyMm: string,
+): Promise<ProductionMonth | null> {
+  const res = await fetch(`${BASE}/production-months/${yyyyMm}`, {
+    headers: await authHeaders(),
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+/** Upserts a (possibly partial) operational draft for the month. */
+export async function putProductionMonth(
+  yyyyMm: string,
+  inputs: ProductionMonthInputs,
+): Promise<ProductionMonth> {
+  const res = await fetch(`${BASE}/production-months/${yyyyMm}`, {
+    method: "PUT",
+    headers: await authHeaders(),
+    body: JSON.stringify({ inputs }),
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
