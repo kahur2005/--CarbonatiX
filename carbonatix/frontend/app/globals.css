@@ -1,67 +1,96 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+:root,
+html[data-theme="dark"] {
+  --background: #0b0f17;
+  --foreground: #f8fafc;
+  --sm-bg: #0b0f17;
+  --sm-card: #131b2a;
+  --sm-border: #212f46;
+  --sm-green: #10b981;
+  --sm-amber: #f59e0b;
+  --sm-red: #ef4444;
+  --sm-cyan: #06b6d4;
+  --sm-violet: #8b5cf6;
+  --sm-text: #f8fafc;
+  --sm-muted: #64748b;
+  --sm-dim: #94a3b8;
+  --sm-panel: #0d1420;
+  --sm-header: #0d1320;
+}
+
+/* Light theme must set readable near-black text — do not leave dark-mode
+   white foreground on a light surface (looks like “missing” values). */
+html[data-theme="light"] {
+  --background: #f1f5f9;
+  --foreground: #0f172a;
+  --sm-bg: #f1f5f9;
+  --sm-card: #ffffff;
+  --sm-border: #e2e8f0;
+  --sm-green: #059669;
+  --sm-amber: #d97706;
+  --sm-red: #dc2626;
+  --sm-cyan: #0891b2;
+  --sm-violet: #7c3aed;
+  --sm-text: #0f172a;
+  --sm-muted: #64748b;
+  --sm-dim: #475569;
+  --sm-panel: #f1f5f9;
+  --sm-header: #ffffff;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  /* Utilities: font-sans / font-mono / font-display */
+  --font-sans: var(--font-inter), system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, monospace;
+  --font-display: var(--font-rajdhani), "Rajdhani", sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
+html,
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--sm-bg);
+  color: var(--sm-text);
+  font-family: var(--font-sans);
+}
+
+/* Aliases for inline styles that still use the older token names. */
+html {
+  --font-body: var(--font-inter), system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, monospace;
+  --font-display: var(--font-rajdhani), "Rajdhani", sans-serif;
 }
 
 /*
- * Chart color roles for the dashboard (app/dashboard). Values are the
- * validated default categorical/status palette from the dataviz skill
- * (see .superpowers dataviz skill's references/palette.md) -- slot order
- * is the CVD-safety mechanism and must not be reshuffled. Scoped to
- * `.viz-root` so chart code reads roles (`var(--chart-series-1)`, etc.)
- * rather than raw hex, and the dark step-set swaps in one place.
+ * Chart color roles for the dashboard. CVD-safe categorical/status palette;
+ * scoped to `.viz-root`. Tuned to sit on the industrial dark console.
  */
 .viz-root {
-  --chart-surface: #fcfcfb;
-  --chart-text-primary: #0b0b0b;
-  --chart-text-secondary: #52514e;
-  --chart-muted: #898781;
-  --chart-gridline: #e1e0d9;
-  --chart-baseline: #c3c2b7;
-  --chart-series-1: #2a78d6; /* blue */
-  --chart-series-2: #eb6834; /* orange */
-  --chart-series-3: #1baf7a; /* aqua */
-  --chart-series-4: #eda100; /* yellow */
-  /* Status is a small fixed scale, never themed -- same steps in both
-     modes (see palette.md's status table). */
-  --chart-status-good: #0ca30c;
-  --chart-status-warning: #fab219;
-  --chart-status-critical: #d03b3b;
+  --chart-surface: #131b2a;
+  --chart-text-primary: #f8fafc;
+  --chart-text-secondary: #94a3b8;
+  --chart-muted: #64748b;
+  --chart-gridline: #212f46;
+  --chart-baseline: #334155;
+  --chart-series-1: #06b6d4;
+  --chart-series-2: #f59e0b;
+  --chart-series-3: #10b981;
+  --chart-series-4: #8b5cf6;
+  --chart-status-good: #10b981;
+  --chart-status-warning: #f59e0b;
+  --chart-status-critical: #ef4444;
 }
 
-@media (prefers-color-scheme: dark) {
-  .viz-root {
-    --chart-surface: #1a1a19;
-    --chart-text-primary: #ffffff;
-    --chart-text-secondary: #c3c2b7;
-    --chart-muted: #898781;
-    --chart-gridline: #2c2c2a;
-    --chart-baseline: #383835;
-    --chart-series-1: #3987e5;
-    --chart-series-2: #d95926;
-    --chart-series-3: #199e70;
-    --chart-series-4: #c98500;
-  }
+html[data-theme="light"] .viz-root {
+  --chart-surface: #ffffff;
+  --chart-text-primary: #0f172a;
+  --chart-text-secondary: #475569;
+  --chart-muted: #64748b;
+  --chart-gridline: #e2e8f0;
+  --chart-baseline: #cbd5e1;
+  --chart-series-1: #0891b2;
+  --chart-series-2: #d97706;
+  --chart-series-3: #059669;
+  --chart-series-4: #7c3aed;
 }
