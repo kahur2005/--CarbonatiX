@@ -60,7 +60,10 @@ export default function NodeGraph({ statuses }: { statuses: NodeStatuses }) {
       className="viz-root flex flex-col gap-3 rounded-lg border border-black/[.08] bg-[var(--chart-surface)] p-4 dark:border-white/[.145]"
       data-testid="node-graph"
     >
-      <h2 className="text-sm font-semibold text-[var(--chart-text-primary)]">
+      <h2
+        className="text-sm font-semibold text-[var(--chart-text-primary)]"
+        style={{ fontFamily: "var(--font-display), sans-serif" }}
+      >
         Proses Penalaran AI
       </h2>
       <ol className="flex flex-wrap items-center gap-2">
@@ -75,7 +78,11 @@ export default function NodeGraph({ statuses }: { statuses: NodeStatuses }) {
                 role="status"
                 aria-label={`${STAGE_LABEL[stage]}: ${STATUS_LABEL[status]}`}
                 className="flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium"
-                style={{ borderColor: `var(${colorVar})`, color: `var(${colorVar})` }}
+                style={{
+                  borderColor: `var(${colorVar})`,
+                  color: `var(${colorVar})`,
+                  fontFamily: "var(--font-mono), monospace",
+                }}
               >
                 {status === "running" && (
                   <span

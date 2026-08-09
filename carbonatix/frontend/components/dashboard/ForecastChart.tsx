@@ -75,7 +75,10 @@ export default function ForecastChart({
   if (n === 0) {
     return (
       <div className="viz-root rounded-lg border border-black/[.08] bg-[var(--chart-surface)] p-4 dark:border-white/[.145]">
-        <h3 className="text-sm font-semibold text-[var(--chart-text-primary)]">
+        <h3
+          className="text-sm font-semibold text-[var(--chart-text-primary)]"
+          style={{ fontFamily: "var(--font-display), sans-serif" }}
+        >
           {title} ({unitLabel})
         </h3>
         <p className="mt-2 text-sm text-[var(--chart-text-secondary)]">Tidak ada data proyeksi.</p>
@@ -98,8 +101,12 @@ export default function ForecastChart({
   return (
     <div className="viz-root rounded-lg border border-black/[.08] bg-[var(--chart-surface)] p-4 dark:border-white/[.145]">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-[var(--chart-text-primary)]">
-          {title} <span className="font-normal text-[var(--chart-text-secondary)]">({unitLabel})</span>
+        <h3
+          className="text-sm font-semibold text-[var(--chart-text-primary)]"
+          style={{ fontFamily: "var(--font-display), sans-serif" }}
+        >
+          {title}{" "}
+          <span className="font-normal text-[var(--chart-text-secondary)]">({unitLabel})</span>
         </h3>
         {synthetic && (
           <span

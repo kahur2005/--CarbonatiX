@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import EmissionBars from "./EmissionBars";
-import { INTENSITY_NULL_TOOLTIP } from "@/lib/dashboard";
 import type { EmissionResult } from "@/types/emissions";
 
 const BASE_RESULT: EmissionResult = {
@@ -23,24 +22,10 @@ const BASE_RESULT: EmissionResult = {
 };
 
 describe("EmissionBars", () => {
-  it("renders the total and a numeric intensity together when nickel was tapped", () => {
+  it("does not repeat total/intensity tiles already shown in the KPI bar", () => {
     render(<EmissionBars result={BASE_RESULT} />);
-    expect(screen.getByText("75 tCO2e")).toBeInTheDocument();
-    expect(screen.getByText("0,75 tCO2e/ton Ni")).toBeInTheDocument();
-  });
-
-  it('renders "—" (never "0") for a null intensity, with the tap-free tooltip attached', () => {
-    const result: EmissionResult = { ...BASE_RESULT, intensityPerTonneNi: null };
-    render(<EmissionBars result={result} />);
-
-    // The intensity stat tile must show the em dash, not a literal 0.
-    const intensityTile = screen.getByText("—");
-    expect(intensityTile).toBeInTheDocument();
-    expect(screen.queryByText(/^0(\.|,)?0* tCO2e\/ton Ni/)).not.toBeInTheDocument();
-
-    // The Indonesian explanation is present in the DOM (tooltip visibility
-    // is CSS-only, so it's reachable without hovering).
-    expect(screen.getByText(INTENSITY_NULL_TOOLTIP)).toBeInTheDocument();
+    expect(screen.queryByText("Total emisi")).not.toBeInTheDocument();
+    expect(screen.queryByText("Intensitas per ton Ni")).not.toBeInTheDocument();
   });
 
   it("groups the four stage bars into the ore-driven and nickel-driven clusters, not a flat row", () => {

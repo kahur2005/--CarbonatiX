@@ -131,7 +131,12 @@ export default function RecommendationPanel({ outcome }: { outcome: AdvisorOutco
       data-testid="recommendation-panel"
       className="viz-root flex flex-col gap-3 rounded-lg border border-black/[.08] bg-[var(--chart-surface)] p-4 dark:border-white/[.145]"
     >
-      <h2 className="text-sm font-semibold text-[var(--chart-text-primary)]">Rekomendasi</h2>
+      <h2
+        className="text-sm font-semibold text-[var(--chart-text-primary)]"
+        style={{ fontFamily: "var(--font-display), sans-serif" }}
+      >
+        Rekomendasi
+      </h2>
 
       {outcome.kind === "pending" && (
         <p className="text-sm text-[var(--chart-text-secondary)]">Menyusun rekomendasi...</p>
